@@ -73,7 +73,7 @@ pub async fn transcribe(
         .map_err(|err| ApiError::bad(err.to_string()))?;
     let form = reqwest::multipart::Form::new()
         .part("file", part)
-        .text("model", model)
+        .text("model", model.to_string())
         .text("language", "en")
         .text("response_format", "json")
         .text("temperature", "0")
