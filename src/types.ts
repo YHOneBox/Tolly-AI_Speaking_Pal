@@ -1,0 +1,105 @@
+export const DEFAULT_VOICE_ID = "db6b0ed5-d5d3-463d-ae85-518a07d3c2b4";
+export const DEFAULT_CHAT_MODEL = "llama-3.3-70b-versatile";
+export const DEFAULT_STT_MODEL = "whisper-large-v3";
+
+export type CaptureMode = "vad" | "hold";
+
+export type Preferences = {
+  voiceId: string;
+  llmModel: string;
+  sttModel: string;
+  dailyTokenBudget: number;
+  captureMode: CaptureMode;
+};
+
+export type ListedModel = {
+  id: string;
+  ownedBy: string;
+  contextWindow: number | null;
+};
+
+export type GroqCatalog = {
+  chat: ListedModel[];
+  speech: ListedModel[];
+};
+
+export const FALLBACK_CHAT_MODELS: ListedModel[] = [
+  { id: DEFAULT_CHAT_MODEL, ownedBy: "Meta", contextWindow: 131072 },
+  { id: "llama-3.1-8b-instant", ownedBy: "Meta", contextWindow: 131072 },
+];
+
+export const FALLBACK_SPEECH_MODELS: ListedModel[] = [
+  { id: DEFAULT_STT_MODEL, ownedBy: "OpenAI", contextWindow: null },
+];
+
+export type TokenUsage = {
+  day: string;
+  promptTokens: number;
+  completionTokens: number;
+};
+
+export type Bootstrap = {
+  groqConfigured: boolean;
+  cartesiaConfigured: boolean;
+  preferences: Preferences;
+  usage: TokenUsage;
+  warningRatio: number;
+};
+
+export type CommandError = {
+  code: string;
+  message: string;
+  retryAfterSecs?: number | null;
+  used?: number | null;
+  budget?: number | null;
+};
+
+export type VoiceOption = {
+  id: string;
+  name: string;
+  language: string;
+  description: string;
+};
+
+export type ChatMessage = {
+  id: string;
+  role: "user" | "assistant";
+  text: string;
+  feedback?: string[];
+};
+
+export type Phase = "idle" | "listening" | "transcribing" | "thinking" | "speaking";
+
+export const DEFAULT_PREFERENCES: Preferences = {
+  voiceId: DEFAULT_VOICE_ID,
+  llmModel: DEFAULT_CHAT_MODEL,
+  sttModel: DEFAULT_STT_MODEL,
+  dailyTokenBudget: 100_000,
+  captureMode: "vad",
+};
+
+export function modelLabel(model: ListedModel): string {
+  const window =
+    model.contextWindow && model.contextWindow >= 1000
+      ? ` · ${Math.round(model.contextWindow / 1000)}k`
+      : "";
+  return `${model.id}${window}`;
+}
+
+export function preferModel(models: ListedModel[], current: string, preferred: string): string {
+  if (models.some((model) => model.id === current)) {
+    return current;
+  }
+  if (models.some((model) => model.id === preferred)) {
+    return preferred;
+  }
+  return models[0]?.id ?? current;
+}
+
+export function normalizeCaptureMode(value: string | undefined): CaptureMode {
+  return value === "hold" ? "hold" : "vad";
+}
+
+export function usageTotal(usage: TokenUsage): number {
+  return usage.promptTokens + usage.completionTokens;
+}

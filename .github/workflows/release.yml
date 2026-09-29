@@ -1,0 +1,116 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Require the tag to match the app version
+        run: |
+          version="$(node -p "require('./src-tauri/tauri.conf.json').version")"
+          tag="${GITHUB_REF_NAME#v}"
+          if [ "$version" != "$tag" ]; then
+            echo "Tag ${GITHUB_REF_NAME} does not match tauri.conf.json version ${version}."
+            echo "Bump package.json, src-tauri/Cargo.toml, and src-tauri/tauri.conf.json, then tag v${version}."
+            exit 1
+          fi
+
+      - name: Create the GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: AI Speaking Pal ${{ github.ref_name }}
+          generate_release_notes: true
+          body: |
+            Portable builds. There is no installer.
+
+            - Windows: `AI-Speaking-Pal-${{ github.ref_name }}-windows-x64.exe`
+            - macOS: `.dmg` and a zipped `.app`
+            - Linux: `.AppImage` (`chmod +x` the file before running it)
+
+            The Windows file is a single executable. Windows 11 already includes WebView2. Windows 10 needs that runtime installed separately.
+
+  build:
+    needs: release
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: windows
+          - os: macos-latest
+            target: macos
+          - os: ubuntu-22.04
+            target: linux
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+
+      - name: Install Linux dependencies
+        if: matrix.target == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Build portable Windows exe
+        if: matrix.target == 'windows'
+        run: npm run tauri build -- --no-bundle
+
+      - name: Build macOS app and dmg
+        if: matrix.target == 'macos'
+        run: npm run tauri build -- --bundles app,dmg
+
+      - name: Build Linux AppImage
+        if: matrix.target == 'linux'
+        run: npm run tauri build -- --bundles appimage
+
+      - name: Collect release files
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          tag="${GITHUB_REF_NAME}"
+          case "${{ matrix.target }}" in
+            windows)
+              cp src-tauri/target/release/ai-speaking-pal.exe "release/AI-Speaking-Pal-${tag}-windows-x64.exe"
+              ;;
+            macos)
+              app="$(echo src-tauri/target/release/bundle/macos/*.app)"
+              dmg="$(echo src-tauri/target/release/bundle/dmg/*.dmg)"
+              ditto -c -k --keepParent "$app" "release/AI-Speaking-Pal-${tag}-macos.app.zip"
+              cp "$dmg" "release/AI-Speaking-Pal-${tag}-macos.dmg"
+              ;;
+            linux)
+              cp src-tauri/target/release/bundle/appimage/*.AppImage "release/AI-Speaking-Pal-${tag}-linux-x64.AppImage"
+              ;;
+          esac
+          ls -lh release
+
+      - name: Upload to the tag release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/*
+          fail_on_unmatched_files: true

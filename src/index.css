@@ -1,0 +1,48 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Segoe UI", "Helvetica Neue", sans-serif;
+  --font-serif: Georgia, "Iowan Old Style", Palatino, serif;
+  --color-paper: #12110f;
+  --color-ink: #f4efe6;
+  --color-muted: #a3988c;
+  --color-line: #34302b;
+  --color-card: #1e1c19;
+  --color-accent: #e07a52;
+  --color-accent-dark: #c4532a;
+  --color-note: #3a2f24;
+  --color-danger: #f0a3a3;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  color-scheme: dark;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+@keyframes listen-ring {
+  0% {
+    transform: scale(1);
+    opacity: 0.55;
+  }
+  100% {
+    transform: scale(1.55);
+    opacity: 0;
+  }
+}
+
+.listen-ring {
+  animation: listen-ring 1.4s ease-out infinite;
+}

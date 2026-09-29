@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.DS_Store
+*.log
+
+# API keys stay in the OS keychain and Stronghold, never in the repo.
+.env
+.env.*
+
+src-tauri/target/
+src-tauri/gen/schemas/
