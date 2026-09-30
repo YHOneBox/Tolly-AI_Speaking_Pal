@@ -68,7 +68,7 @@ export function ChatTranscript({
         >
           <div className={message.role === "user" ? "max-w-[80%]" : "max-w-[85%]"}>
             <p className="mb-1 text-xs uppercase tracking-[0.14em] text-muted">
-              {message.role === "user" ? "You" : "Pal"}
+              {message.role === "user" ? "You" : "Tolly"}
             </p>
             <div
               className={

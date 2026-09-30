@@ -1,11 +1,13 @@
 //! Non-secret preferences and the local token ledger.
 //! API keys must never be written to this store.
+//! The file lives in the data folder next to the executable.
 
 use crate::error::ApiError;
+use crate::paths;
 use chrono::Local;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tauri::{AppHandle, Runtime};
+use tauri::{AppHandle, Manager, Runtime};
 use tauri_plugin_store::StoreExt;
 
 pub const STORE_FILE: &str = "settings.json";
@@ -77,7 +79,16 @@ fn today() -> String {
 fn open<R: Runtime>(
     app: &AppHandle<R>,
 ) -> Result<std::sync::Arc<tauri_plugin_store::Store<R>>, ApiError> {
-    app.store(STORE_FILE)
+    let path = paths::data_dir()?.join(STORE_FILE);
+    if !path.exists() {
+        if let Ok(legacy_dir) = app.path().app_data_dir() {
+            let legacy = legacy_dir.join(STORE_FILE);
+            if legacy.is_file() {
+                let _ = std::fs::copy(&legacy, &path);
+            }
+        }
+    }
+    app.store(path)
         .map_err(|err| ApiError::storage(err.to_string()))
 }
 

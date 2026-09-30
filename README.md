@@ -1,6 +1,6 @@
-# AI Speaking Pal
+# Tolly
 
-A portable Tauri 2 desktop app for talking with someone who sounds like a person. You speak, Groq Whisper transcribes, Groq replies in a casual voice and may wander onto an ordinary topic, and Cartesia Sonic speaks the reply. Quieter phrasing notes stay on screen.
+A portable Tauri 2 desktop app for talking with someone who sounds like a person. You speak, Groq Whisper transcribes, Groq replies in a casual voice and may wander onto an ordinary topic, and Cartesia Sonic speaks the reply. Quieter phrasing notes stay on screen. A speaking-skill score for the current conversation sits in the top corner.
 
 API keys are yours. Nothing is read from a `.env` file.
 
@@ -8,16 +8,15 @@ API keys are yours. Nothing is read from a `.env` file.
 
 - React (TypeScript, Tailwind) renders the chat, microphone, and Settings modal.
 - Rust owns the Groq and Cartesia HTTP calls, including streamed Llama tokens and Cartesia SSE audio.
-- The OS credential manager (Windows Credential Manager, macOS Keychain, Linux Secret Service) stores the Groq key, the Cartesia key, and the Stronghold vault password.
-- `tauri-plugin-stronghold` keeps an encrypted snapshot copy of the keys. The vault password comes from the OS keychain, so it is not compiled into the app.
-- `tauri-plugin-store` keeps non-secret preferences and the local daily token ledger: voice, model, and budget. It never stores API keys.
+- A `data` folder next to the executable holds everything Tolly saves. API keys are in an encrypted snapshot there. Preferences and the daily token ledger are in `settings.json`. Nothing is written to the system keychain or to AppData.
 
 The model is instructed to return only:
 
 ```json
 {
   "spoken_reply": "Short conversational response",
-  "visual_feedback": ["Correction 1", "Correction 2"]
+  "visual_feedback": ["Correction 1", "Correction 2"],
+  "skill_rating": 75
 }
 ```
 
@@ -53,7 +52,7 @@ Linux `.AppImage`:
 npm run build:linux
 ```
 
-Rust 1.77 or newer and Node 20 or newer are required. On Linux, the Secret Service (`gnome-keyring` or equivalent) must be available for the keychain.
+Rust 1.77 or newer and Node 20 or newer are required. Tolly keeps its `data` folder beside the executable, so you can move that folder with the app.
 
 ## GitHub release
 
@@ -66,9 +65,9 @@ git push origin v0.1.0
 
 The workflow publishes:
 
-- `AI-Speaking-Pal-v0.1.0-windows-x64.exe`
-- `AI-Speaking-Pal-v0.1.0-macos.dmg` and a zipped `.app`
-- `AI-Speaking-Pal-v0.1.0-linux-x64.AppImage`
+- `Tolly-v0.1.0-windows-x64.exe`
+- `Tolly-v0.1.0-macos.dmg` and a zipped `.app`
+- `Tolly-v0.1.0-linux-x64.AppImage`
 
 It does not build an MSI or an NSIS setup.
 

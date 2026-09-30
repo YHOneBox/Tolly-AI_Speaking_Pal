@@ -7,8 +7,7 @@ import { SettingsModal } from "./components/SettingsModal";
 import { bootstrap, cancelSpeech, converse, saveSettings, speak, transcribe } from "./lib/api";
 import { decodeBase64, PcmPlayer, SpeechCapture } from "./lib/audio";
 import { isDesktopShell, toCommandError } from "./lib/errors";
-import { parseDualOutput } from "./lib/parseReply";
-import { readKeysFromStronghold } from "./lib/vault";
+import { blendSkill, estimateSkill, parseDualOutput, speakingBand } from "./lib/parseReply";
 import {
   DEFAULT_PREFERENCES,
   normalizeCaptureMode,
@@ -32,6 +31,7 @@ export default function App() {
   const desktop = isDesktopShell();
   const [session, setSession] = useState<Bootstrap>(EMPTY_SESSION);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [skillRating, setSkillRating] = useState<number | null>(null);
   const [draft, setDraft] = useState("");
   const [phase, setPhase] = useState<Phase>("idle");
   const [notice, setNotice] = useState<string | null>(null);
@@ -66,17 +66,7 @@ export default function App() {
     let cancelled = false;
     void (async () => {
       try {
-        let next = await bootstrap();
-        if (!next.groqConfigured || !next.cartesiaConfigured) {
-          const stored = await readKeysFromStronghold().catch(() => null);
-          if (stored && ((stored.groq && !next.groqConfigured) || (stored.cartesia && !next.cartesiaConfigured))) {
-            next = await saveSettings({
-              groqKey: next.groqConfigured ? undefined : stored.groq ?? undefined,
-              cartesiaKey: next.cartesiaConfigured ? undefined : stored.cartesia ?? undefined,
-              preferences: next.preferences,
-            });
-          }
-        }
+        const next = await bootstrap();
         if (!cancelled) {
           setSession(next);
           setCaptureMode(normalizeCaptureMode(next.preferences.captureMode));
@@ -150,6 +140,10 @@ export default function App() {
       return;
     }
     const parsed = parseDualOutput(result.rawJson);
+    if (shown) {
+      const next = parsed.skillRating ?? estimateSkill(parsed.visualFeedback.length);
+      setSkillRating((current) => blendSkill(current, next));
+    }
     setMessages((current) => [
       ...current,
       {
@@ -419,10 +413,22 @@ export default function App() {
       <header className="border-b border-line px-6 py-4">
         <div className="mx-auto flex max-w-3xl items-center justify-between gap-4">
           <div>
-            <p className="font-serif text-2xl leading-none">Speaking Pal</p>
+            <p className="font-serif text-2xl leading-none">Tolly</p>
             <p className="mt-1 text-sm text-muted">Talk about whatever comes up.</p>
           </div>
           <div className="flex items-center gap-4">
+            <div
+              className="min-w-16 text-right"
+              aria-label={
+                skillRating === null
+                  ? "Speaking skill for this conversation is not rated yet"
+                  : `Speaking skill for this conversation, ${skillRating}, ${speakingBand(skillRating)}`
+              }
+            >
+              <p className="text-[0.65rem] uppercase tracking-[0.16em] text-muted">Speaking</p>
+              <p className="font-serif text-3xl leading-none">{skillRating ?? "—"}</p>
+              <p className="text-xs text-muted">{skillRating === null ? "Not yet" : speakingBand(skillRating)}</p>
+            </div>
             <p className={budgetNote ? "text-sm text-accent" : "text-sm text-muted"}>
               {total.toLocaleString()} / {budget.toLocaleString()} tokens today
             </p>

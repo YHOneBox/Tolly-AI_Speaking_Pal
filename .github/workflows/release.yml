@@ -27,12 +27,12 @@ jobs:
       - name: Create the GitHub release
         uses: softprops/action-gh-release@v2
         with:
-          name: AI Speaking Pal ${{ github.ref_name }}
+          name: Tolly ${{ github.ref_name }}
           generate_release_notes: true
           body: |
             Portable builds. There is no installer.
 
-            - Windows: `AI-Speaking-Pal-${{ github.ref_name }}-windows-x64.exe`
+            - Windows: `Tolly-${{ github.ref_name }}-windows-x64.exe`
             - macOS: `.dmg` and a zipped `.app`
             - Linux: `.AppImage` (`chmod +x` the file before running it)
 
@@ -95,16 +95,16 @@ jobs:
           tag="${GITHUB_REF_NAME}"
           case "${{ matrix.target }}" in
             windows)
-              cp src-tauri/target/release/ai-speaking-pal.exe "release/AI-Speaking-Pal-${tag}-windows-x64.exe"
+              cp src-tauri/target/release/ai-speaking-pal.exe "release/Tolly-${tag}-windows-x64.exe"
               ;;
             macos)
               app="$(echo src-tauri/target/release/bundle/macos/*.app)"
               dmg="$(echo src-tauri/target/release/bundle/dmg/*.dmg)"
-              ditto -c -k --keepParent "$app" "release/AI-Speaking-Pal-${tag}-macos.app.zip"
-              cp "$dmg" "release/AI-Speaking-Pal-${tag}-macos.dmg"
+              ditto -c -k --keepParent "$app" "release/Tolly-${tag}-macos.app.zip"
+              cp "$dmg" "release/Tolly-${tag}-macos.dmg"
               ;;
             linux)
-              cp src-tauri/target/release/bundle/appimage/*.AppImage "release/AI-Speaking-Pal-${tag}-linux-x64.AppImage"
+              cp src-tauri/target/release/bundle/appimage/*.AppImage "release/Tolly-${tag}-linux-x64.AppImage"
               ;;
           esac
           ls -lh release

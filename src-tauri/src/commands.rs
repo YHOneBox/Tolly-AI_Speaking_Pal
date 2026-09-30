@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, State};
 
 use crate::cartesia;
 use crate::error::ApiError;
@@ -30,13 +30,6 @@ pub struct SaveSettings {
     pub stt_model: String,
     pub daily_token_budget: u64,
     pub capture_mode: String,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct VaultUnlock {
-    pub snapshot_path: String,
-    pub password: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -97,20 +90,6 @@ pub fn save_settings(app: AppHandle, settings: SaveSettings) -> Result<Bootstrap
 pub fn clear_credentials(app: AppHandle) -> Result<Bootstrap, ApiError> {
     secrets::clear_keys()?;
     bootstrap(app)
-}
-
-#[tauri::command]
-pub fn stronghold_unlock(app: AppHandle) -> Result<VaultUnlock, ApiError> {
-    let directory = app
-        .path()
-        .app_data_dir()
-        .map_err(|err| ApiError::storage(err.to_string()))?;
-    std::fs::create_dir_all(&directory).map_err(|err| ApiError::storage(err.to_string()))?;
-    let snapshot = directory.join("vault.hold");
-    Ok(VaultUnlock {
-        snapshot_path: snapshot.to_string_lossy().to_string(),
-        password: secrets::vault_password()?,
-    })
 }
 
 #[tauri::command]

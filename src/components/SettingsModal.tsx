@@ -2,7 +2,6 @@ import { useEffect, useId, useRef, useState } from "react";
 
 import { clearCredentials, listGroqModels, listVoices, saveSettings } from "../lib/api";
 import { isDesktopShell, toCommandError } from "../lib/errors";
-import { clearStrongholdKeys, mirrorKeysToStronghold } from "../lib/vault";
 import {
   DEFAULT_CHAT_MODEL,
   DEFAULT_STT_MODEL,
@@ -189,23 +188,10 @@ export function SettingsModal({ session, onClose, onSession }: SettingsModalProp
         cartesiaKey: cartesiaKey.trim() || undefined,
         preferences,
       });
-      let snapshotFailed = false;
-      if (groqKey.trim() || cartesiaKey.trim()) {
-        try {
-          await mirrorKeysToStronghold(groqKey.trim() || undefined, cartesiaKey.trim() || undefined);
-        } catch (error: unknown) {
-          snapshotFailed = true;
-          setFormError(
-            `Keys are in the system keychain. The encrypted snapshot was not updated: ${toCommandError(error).message}`,
-          );
-        }
-      }
       onSession(next);
       setGroqKey("");
       setCartesiaKey("");
-      if (!snapshotFailed) {
-        onClose();
-      }
+      onClose();
     } catch (error: unknown) {
       setFormError(toCommandError(error).message);
     } finally {
@@ -218,11 +204,6 @@ export function SettingsModal({ session, onClose, onSession }: SettingsModalProp
     setFormError(null);
     try {
       const next = await clearCredentials();
-      try {
-        await clearStrongholdKeys();
-      } catch (error: unknown) {
-        setFormError(`Keychain entries were removed. Snapshot cleanup failed: ${toCommandError(error).message}`);
-      }
       onSession(next);
       setGroqKey("");
       setCartesiaKey("");
@@ -252,7 +233,7 @@ export function SettingsModal({ session, onClose, onSession }: SettingsModalProp
               Settings
             </h2>
             <p className="mt-1 text-sm leading-6 text-muted">
-              Keys stay on this computer. A Groq key loads the chat and speech models it can use. Cartesia speaks the reply.
+              Keys stay in the data folder next to Tolly. A Groq key loads the chat and speech models it can use. Cartesia speaks the reply.
             </p>
           </div>
           <button type="button" className="text-sm text-muted hover:text-ink" onClick={onClose}>

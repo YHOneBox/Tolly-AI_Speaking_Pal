@@ -4,6 +4,7 @@ use serde::Serialize;
 pub struct DualOutput {
     pub spoken_reply: String,
     pub visual_feedback: Vec<String>,
+    pub skill_rating: Option<u8>,
 }
 
 pub fn parse_dual_output(raw: &str) -> Result<DualOutput, String> {
@@ -43,6 +44,7 @@ pub fn parse_dual_output(raw: &str) -> Result<DualOutput, String> {
     }
     notes.truncate(4);
 
+    let skill_rating = parse_skill_rating(&value);
     let spoken_reply = spoken.trim();
     if spoken_reply.is_empty() {
         return Err("The model returned an empty spoken reply.".into());
@@ -52,13 +54,27 @@ pub fn parse_dual_output(raw: &str) -> Result<DualOutput, String> {
     Ok(DualOutput {
         spoken_reply,
         visual_feedback: notes,
+        skill_rating,
     })
+}
+
+fn parse_skill_rating(value: &serde_json::Value) -> Option<u8> {
+    let raw = value.get("skill_rating")?;
+    if raw.is_null() {
+        return None;
+    }
+    let number = raw.as_f64()?;
+    if !number.is_finite() {
+        return None;
+    }
+    Some(number.round().clamp(0.0, 100.0) as u8)
 }
 
 pub fn canonical_json(output: &DualOutput) -> Result<String, String> {
     serde_json::to_string(&serde_json::json!({
         "spoken_reply": output.spoken_reply,
         "visual_feedback": output.visual_feedback,
+        "skill_rating": output.skill_rating,
     }))
     .map_err(|err| err.to_string())
 }
@@ -73,6 +89,21 @@ mod tests {
         let parsed = parse_dual_output(raw).unwrap();
         assert_eq!(parsed.spoken_reply, "I went yesterday.");
         assert_eq!(parsed.visual_feedback.len(), 1);
+        assert_eq!(parsed.skill_rating, None);
+    }
+
+    #[test]
+    fn keeps_a_conversation_skill_rating() {
+        let raw = r#"{"spoken_reply":"Yeah, that cafe is good.","visual_feedback":[],"skill_rating":82.4}"#;
+        let parsed = parse_dual_output(raw).unwrap();
+        assert_eq!(parsed.skill_rating, Some(82));
+    }
+
+    #[test]
+    fn clamps_a_skill_rating() {
+        let raw = r#"{"spoken_reply":"Hello.","visual_feedback":[],"skill_rating":140}"#;
+        let parsed = parse_dual_output(raw).unwrap();
+        assert_eq!(parsed.skill_rating, Some(100));
     }
 
     #[test]
