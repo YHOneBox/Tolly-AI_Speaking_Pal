@@ -23,7 +23,7 @@ pub fn run() {
     let http = reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(10))
         .timeout(Duration::from_secs(120))
-        .user_agent("Tolly/0.1.0")
+        .user_agent("Tolly/0.2.0")
         .build()
         .expect("build HTTP client");
 

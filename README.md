@@ -59,15 +59,15 @@ Rust 1.77 or newer and Node 20 or newer are required. Tolly keeps its `data` fol
 Pushing a version tag builds the portable files and attaches them to a GitHub Release. The tag must match `src-tauri/tauri.conf.json`, and the same version in `package.json` and `src-tauri/Cargo.toml`.
 
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
+git tag v0.2.0
+git push origin v0.2.0
 ```
 
 The workflow publishes:
 
-- `Tolly-v0.1.0-windows-x64.exe`
-- `Tolly-v0.1.0-macos.dmg` and a zipped `.app`
-- `Tolly-v0.1.0-linux-x64.AppImage`
+- `Tolly-v0.2.0-windows-x64.exe`
+- `Tolly-v0.2.0-macos.dmg` and a zipped `.app`
+- `Tolly-v0.2.0-linux-x64.AppImage`
 
 It does not build an MSI or an NSIS setup.
 
