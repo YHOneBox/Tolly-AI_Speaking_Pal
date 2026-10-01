@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 
-import { Presence, TalkButton } from "./components/Composer";
+import { Presence } from "./components/Avatar";
+import { TalkDock } from "./components/Composer";
 import { RateLimitBanner } from "./components/RateLimitBanner";
 import { SettingsModal } from "./components/SettingsModal";
 import { Stage } from "./components/Stage";
@@ -16,7 +17,7 @@ import {
   type UpdateOffer,
   type UpdateProgress,
 } from "./lib/api";
-import { decodeBase64, PcmPlayer, SpeechCapture } from "./lib/audio";
+import { decodeBase64, PcmPlayer, SpeechCapture, type MicLevel } from "./lib/audio";
 import { isDesktopShell, toCommandError } from "./lib/errors";
 import { blendSkill, estimateSkill, parseDualOutput, speakingBand } from "./lib/parseReply";
 import {
@@ -31,8 +32,10 @@ import {
   type Phase,
 } from "./types";
 
+const QUIET: MicLevel = { level: 0, voiced: false, capturing: false };
+
 const EMPTY_SESSION: Bootstrap = {
-  version: "1.0.2",
+  version: "1.1.0",
   groqConfigured: false,
   cartesiaConfigured: false,
   preferences: DEFAULT_PREFERENCES,
@@ -51,6 +54,7 @@ export default function App() {
   const [heardYou, setHeardYou] = useState(false);
   const [phase, setPhaseState] = useState<Phase>("idle");
   const [micOpen, setMicOpen] = useState(false);
+  const [reading, setReading] = useState<MicLevel>(QUIET);
   const [notice, setNotice] = useState<string | null>(null);
   const [rateLimit, setRateLimit] = useState<CommandError | null>(null);
   const [budgetNote, setBudgetNote] = useState<string | null>(null);
@@ -228,6 +232,7 @@ export default function App() {
       const capture = new SpeechCapture(
         (wav) => onUtteranceRef.current(wav),
         () => onSpeechStartRef.current(),
+        (level) => setReading(level),
       );
       await capture.start();
       captureRef.current = capture;
@@ -335,9 +340,13 @@ export default function App() {
     setBudgetNote(result.budgetWarning ? "You have used most of today's token budget." : null);
     setRateLimit(null);
 
+    await sayAloud(parsed.spokenReply, generation);
+  }
+
+  async function sayAloud(text: string, generation: number): Promise<void> {
     const turnId = crypto.randomUUID();
     const playback = player();
-    playback.setVolume(session.preferences.voiceVolume);
+    playback.setVolume(sessionRef.current.preferences.voiceVolume);
     playback.resume();
     playback.stop();
     setPhase("speaking");
@@ -345,7 +354,7 @@ export default function App() {
     if (generation !== turnGen.current) {
       return;
     }
-    await speak(parsed.spokenReply, turnId, (chunk) => {
+    await speak(text, turnId, (chunk) => {
       if (generation !== turnGen.current) {
         return;
       }
@@ -360,6 +369,31 @@ export default function App() {
     }
     clearBargeTimer();
     captureRef.current?.setBargeIn(false);
+  }
+
+  async function replayLast(): Promise<void> {
+    const line = tollySaid;
+    if (!line || lockRef.current || !requireReady()) {
+      return;
+    }
+    const generation = turnGen.current;
+    lockRef.current = true;
+    setNotice(null);
+    try {
+      await sayAloud(line, generation);
+    } catch (error: unknown) {
+      if (generation === turnGen.current) {
+        showFailure(error);
+      }
+    } finally {
+      finishListeningState(generation);
+    }
+  }
+
+  async function endSession(): Promise<void> {
+    setNotice(null);
+    cutAssistant();
+    await releaseMic();
   }
 
   onSpeechStartRef.current = () => {
@@ -408,6 +442,7 @@ export default function App() {
     const capture = captureRef.current;
     captureRef.current = null;
     await capture?.stop();
+    setReading(QUIET);
     if (!lockRef.current) {
       setPhase("idle");
     }
@@ -558,71 +593,75 @@ export default function App() {
   const budget = session.preferences.dailyTokenBudget;
   const ready = session.groqConfigured && session.cartesiaConfigured;
   const shell = layout === "center" ? "max-w-3xl" : "max-w-5xl";
-  const scene =
-    layout === "split"
-      ? "grid items-start gap-8 md:grid-cols-[minmax(0,1fr)_auto]"
-      : "flex w-full flex-col items-center gap-8";
-  const stage = (
-    <Stage
-      layout={layout}
-      youSaid={youSaid}
-      notes={latestNotes}
-      earlier={earlierNotes}
-      tollySaid={tollySaid}
-      heardYou={heardYou}
-      keysReady={ready}
-      onOpenSettings={() => setSettingsOpen(true)}
-      onStartTalking={() => void startTalking()}
-    />
-  );
+  const started = heardYou || Boolean(tollySaid);
+  const status =
+    phase === "speaking"
+      ? "Tolly is talking. Start speaking to cut in."
+      : phase === "thinking"
+        ? "Thinking…"
+        : phase === "transcribing"
+          ? "Got it, one moment…"
+          : phase === "listening"
+            ? reading.voiced
+              ? "Hearing you…"
+              : "Listening…"
+            : started
+              ? "Your turn whenever you're ready."
+              : "Ready when you are.";
 
   return (
     <div className="flex h-full flex-col bg-paper text-ink">
-      <header className="border-b border-line/80 bg-paper/80 px-6 py-3 backdrop-blur">
+      <header className="px-6 pt-4 pb-2">
         <div className={`mx-auto flex ${shell} items-center justify-between gap-4`}>
-          <div>
-            <p className="text-sm font-medium tracking-[0.32em] text-accent">TOLLY</p>
-            <p className="mt-1 text-xs text-muted">v{session.version}</p>
+          <div className="flex items-center gap-3">
+            <p className="gradient-text text-lg font-semibold tracking-tight">Tolly</p>
+            <span className="text-xs text-muted">v{session.version}</span>
           </div>
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-2">
             <div
-              className="min-w-16 text-right"
+              className="pill flex items-center gap-2 rounded-full px-3 py-1.5"
               aria-label={
                 skillRating === null
                   ? "Speaking skill for this conversation is not rated yet"
                   : `Speaking skill for this conversation, ${skillRating}, ${speakingBand(skillRating)}`
               }
             >
-              <p className="text-[0.65rem] uppercase tracking-[0.16em] text-muted">Speaking</p>
-              <p className="text-2xl font-medium leading-none tracking-tight text-accent">{skillRating ?? "—"}</p>
-              <p className="text-xs text-muted">{skillRating === null ? "Not yet" : speakingBand(skillRating)}</p>
+              <span className="text-xs text-muted">Speaking</span>
+              <span className="text-sm font-semibold text-accent-dark">{skillRating ?? "—"}</span>
+              <span className="hidden text-xs text-muted sm:inline">{skillRating === null ? "Not rated yet" : speakingBand(skillRating)}</span>
             </div>
-            <p className={budgetNote ? "text-sm text-accent" : "hidden text-sm text-muted sm:block"}>
-              {total.toLocaleString()} / {budget.toLocaleString()} tokens today
-            </p>
             <button
               type="button"
-              className="rounded-full border border-line bg-card px-3 py-1.5 text-sm"
+              className="pill grid h-9 w-9 place-items-center rounded-full text-muted hover:text-ink"
+              aria-label="Settings"
               onClick={() => setSettingsOpen(true)}
             >
-              Settings
+              <svg viewBox="0 0 24 24" className="h-4.5 w-4.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <circle cx="12" cy="12" r="3" />
+                <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z" />
+              </svg>
             </button>
           </div>
         </div>
-        {budgetNote && <p className={`mx-auto mt-2 ${shell} text-sm text-accent`}>{budgetNote}</p>}
+        {budgetNote && <p className={`mx-auto mt-2 ${shell} text-xs text-accent`}>{budgetNote}</p>}
+        {!budgetNote && total > 0 && (
+          <p className={`mx-auto mt-1 ${shell} text-right text-[0.65rem] text-muted`}>
+            {total.toLocaleString()} / {budget.toLocaleString()} tokens today
+          </p>
+        )}
         {!desktop && (
-          <p className={`mx-auto mt-2 ${shell} text-sm text-muted`}>
+          <p className={`mx-auto mt-2 ${shell} rounded-xl bg-note px-3 py-2 text-xs text-muted`}>
             Browser preview. Key storage, Groq, and Cartesia run inside the portable desktop app.
           </p>
         )}
       </header>
       {update?.available && (
-        <div className="border-b border-line bg-note px-6 py-2">
-          <div className={`mx-auto flex ${shell} items-center justify-between gap-3 text-sm`}>
+        <div className="px-6 py-1">
+          <div className={`mx-auto flex ${shell} items-center justify-between gap-3 rounded-xl bg-note px-4 py-2 text-sm`}>
             <p>Version {update.latest} is on GitHub.</p>
             <button
               type="button"
-              className="rounded-full bg-ink px-3 py-1 text-paper disabled:opacity-50"
+              className="btn-primary rounded-full px-3 py-1 text-sm"
               disabled={updating}
               onClick={() => void installUpdate()}
             >
@@ -632,24 +671,40 @@ export default function App() {
         </div>
       )}
       {rateLimit && <RateLimitBanner error={rateLimit} onDismiss={() => setRateLimit(null)} />}
-      <main className="relative min-h-0 flex-1 overflow-y-auto">
-        <div className="tech-grid pointer-events-none absolute inset-0" aria-hidden="true" />
-        <div className={`relative mx-auto w-full ${shell} px-6 py-6 ${scene}`}>
-          {layout === "split" && <div className="order-2 min-w-0 w-full md:order-1">{stage}</div>}
-          <div className={layout === "split" ? "order-1 md:order-2" : ""}>
-            <Presence phase={phase} micOpen={micOpen} />
+      <main className="min-h-0 flex-1 overflow-y-auto">
+        <div className={`mx-auto flex w-full ${shell} flex-col items-center gap-6 px-6 pt-4 pb-8`}>
+          <div className="flex flex-col items-center gap-3">
+            <Presence phase={phase} level={reading.level} />
+            <p className="text-sm text-muted" aria-live="polite">
+              {status}
+            </p>
           </div>
-          {layout !== "split" && <div className="w-full">{stage}</div>}
+          <Stage
+            layout={layout}
+            phase={phase}
+            youSaid={youSaid}
+            notes={latestNotes}
+            earlier={earlierNotes}
+            tollySaid={tollySaid}
+            heardYou={heardYou}
+            keysReady={ready}
+            onOpenSettings={() => setSettingsOpen(true)}
+            onStartTalking={() => void startTalking()}
+          />
         </div>
       </main>
-      <footer className="border-t border-line bg-paper/95 px-6 py-3">
-        <TalkButton
+      <footer className="border-t border-line bg-paper/95 px-6 pt-2 pb-3">
+        <TalkDock
           phase={phase}
           notice={notice}
           micOpen={micOpen}
+          reading={reading}
+          canReplay={Boolean(tollySaid)}
           onShortPress={() => void onShortPress()}
           onHoldStart={() => void holdStart()}
           onHoldEnd={() => void holdEnd()}
+          onEnd={() => void endSession()}
+          onReplay={() => void replayLast()}
         />
       </footer>
       {settingsOpen && (

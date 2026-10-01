@@ -8,7 +8,7 @@ type RateLimitBannerProps = {
 
 export function RateLimitBanner({ error, onDismiss }: RateLimitBannerProps) {
   return (
-    <div className="border-b border-[#5c4630] bg-[#2a2118] px-6 py-3 text-sm text-ink" role="status">
+    <div className="border-b border-line bg-note px-6 py-3 text-sm text-ink" role="status">
       <div className="mx-auto flex max-w-3xl items-start justify-between gap-4">
         <p>
           <span className="font-semibold">Rate limit. </span>

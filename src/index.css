@@ -1,17 +1,19 @@
 @import "tailwindcss";
 
 @theme {
-  --font-sans: "Segoe UI", "Helvetica Neue", sans-serif;
-  --font-serif: "Segoe UI", "Helvetica Neue", sans-serif;
-  --color-paper: #070b14;
-  --color-ink: #e8f4ff;
-  --color-muted: #8aa0b8;
-  --color-line: #1c3148;
-  --color-card: #0e1624;
-  --color-accent: #3ec5ff;
-  --color-accent-dark: #1a8fd4;
-  --color-note: #102033;
-  --color-danger: #ff8f9a;
+  --font-sans: "Segoe UI", "Inter", "Helvetica Neue", sans-serif;
+  --font-serif: "Segoe UI", "Inter", "Helvetica Neue", sans-serif;
+  --color-paper: #0b1020;
+  --color-ink: #eef1ff;
+  --color-muted: #8b93b5;
+  --color-line: #232b45;
+  --color-card: #141a30;
+  --color-card-2: #1b2240;
+  --color-accent: #7c6cff;
+  --color-accent-dark: #3f8cff;
+  --color-note: #1a2140;
+  --color-danger: #f87171;
+  --color-success: #34d399;
 }
 
 html,
@@ -24,8 +26,8 @@ body {
   margin: 0;
   color-scheme: dark;
   background:
-    radial-gradient(ellipse 72% 48% at 50% 38%, rgba(46, 168, 255, 0.18), transparent 62%),
-    #070b14;
+    radial-gradient(ellipse 70% 40% at 50% 0%, rgba(124, 108, 255, 0.16), transparent 70%),
+    #0b1020;
 }
 
 button,
@@ -35,235 +37,260 @@ textarea {
   font: inherit;
 }
 
-.tech-grid {
-  background-image:
-    linear-gradient(rgba(62, 197, 255, 0.07) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(62, 197, 255, 0.07) 1px, transparent 1px);
-  background-size: 56px 56px;
-  mask-image: radial-gradient(ellipse at 50% 42%, black 0%, transparent 70%);
+.btn-primary {
+  background: linear-gradient(90deg, #6d5dfc, #3f8cff);
+  color: #ffffff;
+  box-shadow: 0 10px 28px rgba(96, 110, 255, 0.28);
 }
 
-.presence {
+.btn-primary:disabled {
+  opacity: 0.5;
+  box-shadow: none;
+}
+
+.pill {
+  border: 1px solid #232b45;
+  background: #141a30;
+}
+
+.gradient-text {
+  background: linear-gradient(90deg, #8f7bff, #4aa3ff);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* The friendly face. */
+
+.face {
   position: relative;
   display: grid;
-  width: min(9.5rem, 28vw, 26vh);
-  height: min(9.5rem, 28vw, 26vh);
+  width: 5.5rem;
+  height: 5.5rem;
   place-items: center;
-  pointer-events: none;
-}
-
-.presence-halo {
-  position: absolute;
-  inset: 8%;
   border-radius: 999px;
-  background: radial-gradient(circle, rgba(62, 197, 255, 0.28), transparent 68%);
-  filter: blur(6px);
-  pointer-events: none;
+  background: radial-gradient(circle at 50% 30%, #7f8cff, #4b5bff 55%, #2a3bd8);
+  box-shadow:
+    0 0 0 6px rgba(99, 120, 255, 0.16),
+    0 0 40px rgba(99, 120, 255, 0.45);
+  transition: box-shadow 200ms ease, transform 200ms ease;
 }
 
-.presence-ring,
-.presence-ring-inner {
-  position: absolute;
-  border-radius: 999px;
-  pointer-events: none;
+.face.is-small {
+  width: 2rem;
+  height: 2rem;
+  box-shadow: 0 0 0 2px rgba(99, 120, 255, 0.2);
 }
 
-.presence-ring {
-  inset: 0;
-  background: conic-gradient(from 0deg, transparent 0 70%, rgba(62, 197, 255, 0.95) 86%, transparent 100%);
-  mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 1px));
-  animation: presence-spin 14s linear infinite;
+.face.is-listening {
+  box-shadow:
+    0 0 0 8px rgba(63, 140, 255, 0.18),
+    0 0 48px rgba(63, 140, 255, 0.55);
 }
 
-.presence-ring-inner {
-  inset: 11%;
-  border: 1px dashed rgba(140, 220, 255, 0.45);
-  animation: presence-spin 22s linear infinite reverse;
+.face.is-speaking {
+  animation: face-breathe 1.4s ease-in-out infinite;
 }
 
-.presence-core {
-  position: relative;
-  display: grid;
+.face.is-thinking {
+  box-shadow:
+    0 0 0 6px rgba(124, 108, 255, 0.22),
+    0 0 40px rgba(124, 108, 255, 0.5);
+}
+
+.face svg {
   width: 62%;
   height: 62%;
-  place-items: center;
-  overflow: hidden;
-  border-radius: 999px;
-  background:
-    radial-gradient(circle at 50% 36%, rgba(150, 226, 255, 0.42), transparent 28%),
-    radial-gradient(circle at 50% 58%, rgba(18, 92, 160, 0.55), #071018 72%);
-  box-shadow:
-    0 0 0 1px rgba(160, 230, 255, 0.7),
-    0 0 36px rgba(40, 160, 255, 0.42),
-    inset 0 0 28px rgba(62, 197, 255, 0.22);
-  transition: transform 160ms ease;
 }
 
-.presence-ticks,
-.presence-sweep,
-.presence-nucleus {
-  position: absolute;
-  border-radius: 999px;
-  pointer-events: none;
+.face.is-thinking .face-eye {
+  animation: face-blink 1.1s ease-in-out infinite;
 }
 
-.presence-ticks {
-  inset: 12%;
-  background: repeating-conic-gradient(
-    from 0deg,
-    rgba(186, 236, 255, 0.9) 0 1.6deg,
-    transparent 1.6deg 18deg
-  );
-  mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 2px));
-}
+/* Waveform bars beside the face and in the microphone level bar. */
 
-.presence-sweep {
-  inset: 18%;
-  background: conic-gradient(from 0deg, transparent 0 62%, rgba(232, 248, 255, 0.95) 78%, transparent 100%);
-  mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 1px));
-  animation: presence-spin 8s linear infinite;
-}
-
-.presence-nucleus {
-  width: 22%;
-  height: 22%;
-  background: radial-gradient(circle, #f7fdff 0%, #8adfff 42%, rgba(62, 197, 255, 0) 72%);
-  box-shadow: 0 0 18px rgba(120, 214, 255, 0.85);
-  animation: presence-breathe 2.8s ease-in-out infinite;
-}
-
-.presence.is-holding .presence-core {
-  transform: scale(0.96);
-}
-
-.presence.is-live .presence-ring,
-.presence.is-live .presence-sweep {
-  animation-duration: 3.2s;
-}
-
-.presence.is-live .presence-nucleus {
-  animation-duration: 1.1s;
-}
-
-.presence.is-live .presence-halo,
-.presence.is-speaking .presence-halo {
-  animation: presence-pulse 1.6s ease-out infinite;
-}
-
-.presence.is-speaking .presence-ring,
-.presence.is-speaking .presence-sweep {
-  animation-duration: 1.6s;
-}
-
-.presence.is-speaking .presence-core {
-  box-shadow:
-    0 0 0 1px rgba(210, 245, 255, 0.9),
-    0 0 64px rgba(62, 197, 255, 0.6),
-    inset 0 0 32px rgba(62, 197, 255, 0.35);
-}
-
-.presence.is-thinking .presence-sweep {
-  animation-duration: 2.4s;
-}
-
-.presence-bars {
-  position: relative;
+.wave {
   display: flex;
   align-items: center;
-  justify-content: center;
-  gap: 5px;
-  height: 34%;
+  gap: 3px;
+  height: 2rem;
 }
 
-.presence-bars span {
-  width: 3px;
-  height: 28%;
+.wave span {
+  display: block;
+  width: 4px;
+  height: 20%;
   border-radius: 999px;
-  background: #f4fbff;
-  box-shadow: 0 0 8px rgba(160, 230, 255, 0.9);
-  animation: presence-bar 0.9s ease-in-out infinite;
+  background: linear-gradient(180deg, #8f7bff, #4aa3ff);
+  opacity: 0.55;
+  transition: height 90ms linear;
 }
 
-.presence-bars span:nth-child(2),
-.presence-bars span:nth-child(4) {
-  animation-delay: 0.15s;
+.wave.is-speaking span {
+  opacity: 1;
+  animation: wave-dance 0.9s ease-in-out infinite;
 }
 
-.presence-bars span:nth-child(3) {
-  animation-delay: 0.28s;
+.wave.is-speaking span:nth-child(2) {
+  animation-delay: 0.12s;
 }
 
-@keyframes presence-spin {
-  to {
-    transform: rotate(360deg);
-  }
+.wave.is-speaking span:nth-child(3) {
+  animation-delay: 0.24s;
 }
 
-@keyframes presence-pulse {
-  0% {
-    transform: scale(0.92);
-    opacity: 0.55;
-  }
-  100% {
-    transform: scale(1.18);
-    opacity: 0;
-  }
+.wave.is-speaking span:nth-child(4) {
+  animation-delay: 0.08s;
 }
 
-@keyframes presence-breathe {
+.wave.is-speaking span:nth-child(5) {
+  animation-delay: 0.2s;
+}
+
+.meter {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 3px;
+  height: 1.25rem;
+}
+
+.meter span {
+  display: block;
+  width: 4px;
+  border-radius: 999px;
+  background: #232b45;
+  transition: background 80ms linear, height 80ms linear;
+}
+
+.meter span.is-lit {
+  background: #3f8cff;
+}
+
+.meter span.is-voiced {
+  background: linear-gradient(180deg, #8f7bff, #4aa3ff);
+}
+
+.meter span.is-threshold {
+  background: #8b93b5;
+}
+
+/* The big microphone button. */
+
+.mic {
+  position: relative;
+  display: grid;
+  width: 4.25rem;
+  height: 4.25rem;
+  place-items: center;
+  border: 0;
+  border-radius: 999px;
+  background: linear-gradient(135deg, #6d5dfc, #3f8cff);
+  color: #ffffff;
+  box-shadow:
+    0 0 0 8px rgba(96, 110, 255, 0.14),
+    0 14px 36px rgba(96, 110, 255, 0.35);
+  touch-action: none;
+  user-select: none;
+  transition: transform 120ms ease, box-shadow 160ms ease;
+}
+
+.mic:active,
+.mic.is-holding {
+  transform: scale(0.95);
+}
+
+.mic.is-live {
+  box-shadow:
+    0 0 0 10px rgba(63, 140, 255, 0.2),
+    0 14px 36px rgba(63, 140, 255, 0.4);
+}
+
+.mic.is-live::after {
+  content: "";
+  position: absolute;
+  inset: -8px;
+  border: 2px solid rgba(99, 150, 255, 0.6);
+  border-radius: 999px;
+  animation: mic-ring 1.5s ease-out infinite;
+}
+
+.mic.is-speaking {
+  background: linear-gradient(135deg, #2a3356, #1b2240);
+  box-shadow: 0 0 0 8px rgba(124, 108, 255, 0.12);
+}
+
+.mic svg {
+  width: 1.75rem;
+  height: 1.75rem;
+}
+
+.dock-button {
+  display: grid;
+  width: 2.75rem;
+  height: 2.75rem;
+  place-items: center;
+  border: 1px solid #232b45;
+  border-radius: 999px;
+  background: #141a30;
+  color: #eef1ff;
+}
+
+.dock-button:disabled {
+  opacity: 0.4;
+}
+
+.dock-button svg {
+  width: 1.15rem;
+  height: 1.15rem;
+}
+
+@keyframes face-breathe {
   0%,
   100% {
-    transform: scale(0.86);
-    opacity: 0.75;
+    transform: scale(1);
   }
   50% {
-    transform: scale(1.08);
-    opacity: 1;
+    transform: scale(1.05);
   }
 }
 
-@keyframes presence-bar {
+@keyframes face-blink {
   0%,
   100% {
-    height: 28%;
+    transform: scaleY(1);
+  }
+  50% {
+    transform: scaleY(0.15);
+  }
+}
+
+@keyframes wave-dance {
+  0%,
+  100% {
+    height: 25%;
   }
   50% {
     height: 100%;
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .presence-ring,
-  .presence-ring-inner,
-  .presence-halo,
-  .presence-sweep,
-  .presence-nucleus,
-  .presence-bars span {
-    animation: none;
+@keyframes mic-ring {
+  0% {
+    transform: scale(0.95);
+    opacity: 0.8;
+  }
+  100% {
+    transform: scale(1.35);
+    opacity: 0;
   }
 }
 
-.talk-control {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.55rem;
-  min-width: 7.5rem;
-  border: 1px solid rgba(120, 210, 255, 0.55);
-  border-radius: 999px;
-  background: #102033;
-  color: #e8f4ff;
-  padding: 0.55rem 1.15rem;
-  box-shadow: 0 0 18px rgba(40, 160, 255, 0.18);
-  touch-action: none;
-  user-select: none;
-}
-
-.talk-control.is-live,
-.talk-control.is-holding {
-  box-shadow: 0 0 0 4px rgba(62, 197, 255, 0.18), 0 0 18px rgba(40, 160, 255, 0.28);
-}
-
-.talk-control.is-speaking {
-  border-color: rgba(232, 244, 255, 0.8);
+@media (prefers-reduced-motion: reduce) {
+  .face.is-speaking,
+  .face.is-thinking .face-eye,
+  .wave.is-speaking span,
+  .mic.is-live::after {
+    animation: none;
+  }
 }

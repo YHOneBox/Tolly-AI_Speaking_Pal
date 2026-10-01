@@ -300,7 +300,7 @@ export function SettingsModal({
       >
         <div className="flex items-start justify-between gap-4">
           <div>
-            <h2 id={titleId} className="font-serif text-3xl">
+            <h2 id={titleId} className="text-xl font-semibold tracking-tight">
               Settings
             </h2>
             <p className="mt-1 text-sm leading-6 text-muted">
@@ -477,7 +477,7 @@ export function SettingsModal({
               {update?.available && (
                 <button
                   type="button"
-                  className="rounded-full bg-ink px-3 py-1.5 text-sm text-paper disabled:opacity-50"
+                  className="btn-primary rounded-full px-3 py-1.5 text-sm"
                   disabled={!desktop || updating}
                   onClick={onApplyUpdate}
                 >
@@ -496,7 +496,7 @@ export function SettingsModal({
           </button>
           <button
             type="button"
-            className="rounded-full bg-ink px-4 py-2 text-sm text-paper disabled:opacity-50"
+            className="btn-primary rounded-full px-5 py-2 text-sm font-medium"
             disabled={saving || !desktop}
             onClick={() => void onSave()}
           >
@@ -510,12 +510,12 @@ export function SettingsModal({
 
 function layoutHint(layout: AppLayout): string {
   if (layout === "wide") {
-    return "Grammar notes use the width of the window.";
+    return "The conversation and grammar card use the width of the window.";
   }
   if (layout === "split") {
-    return "Grammar notes stay on the left. Tolly sits on the right.";
+    return "The conversation sits on the left. The grammar card sits on the right.";
   }
-  return "Grammar notes stay in a column in the middle.";
+  return "Everything stays in a column in the middle.";
 }
 
 function LayoutChoice({ active, label, onClick }: { active: boolean; label: string; onClick: () => void }) {
@@ -525,7 +525,7 @@ function LayoutChoice({ active, label, onClick }: { active: boolean; label: stri
       aria-pressed={active}
       className={
         active
-          ? "rounded-xl bg-ink px-2 py-2 text-sm text-paper"
+          ? "btn-primary rounded-xl px-2 py-2 text-sm"
           : "rounded-xl border border-line px-2 py-2 text-sm text-muted hover:text-ink"
       }
       onClick={onClick}
@@ -570,7 +570,7 @@ function SliderField({
         max={max}
         step={step}
         value={shown}
-        className="w-full accent-[#3ec5ff]"
+        className="w-full accent-[#6d5dfc]"
         onChange={(event) => onChange(Number(event.target.value))}
       />
     </label>

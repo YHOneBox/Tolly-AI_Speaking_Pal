@@ -1,19 +1,76 @@
 const TARGET_RATE = 16_000;
-const SPEECH_START_RMS = 0.018;
-const BARGE_START_RMS = 0.06;
-const SPEECH_CONTINUE_RMS = 0.01;
-const SILENCE_MS = 700;
+const SPEECH_START_RMS = 0.016;
+const BARGE_START_RMS = 0.05;
+const SPEECH_CONTINUE_RMS = 0.008;
+const SILENCE_MS = 750;
 const MIN_SPEECH_MS = 280;
 const MIN_VOICED_MS = 140;
 const SPEECH_VOICE_MS = 160;
-const BARGE_VOICE_MS = 280;
+const BARGE_VOICE_MS = 320;
 const MAX_UTTERANCE_MS = 15_000;
 const PREROLL_MS = 280;
 const CHECK_MS = 24;
 const WINDOW_MS = 32;
 const VOICE_SCORE = 0.3;
+const BARGE_VOICE_SCORE = 0.42;
+const FLOOR_MIN = 0.002;
+const FLOOR_MAX = 0.04;
+const LEVEL_EVERY_MS = 50;
 
 type SpeechHandler = (wav: Uint8Array) => void;
+
+export type MicLevel = {
+  /** 0 to 1, how far above the room noise the microphone currently is. */
+  level: number;
+  /** True while the sound has the shape of a voice. */
+  voiced: boolean;
+  /** True while an utterance is being recorded. */
+  capturing: boolean;
+};
+
+export type LevelHandler = (level: MicLevel) => void;
+
+/**
+ * Tracks the quiet level of the room so a fan or a hum does not count as a voice.
+ * The floor drops quickly and rises slowly, so it follows the room rather than the speaker.
+ */
+class NoiseFloor {
+  private value = 0.01;
+  private warm = 0;
+
+  get floor(): number {
+    return this.value;
+  }
+
+  observe(rms: number, speaking: boolean): void {
+    if (!Number.isFinite(rms)) {
+      return;
+    }
+    if (this.warm < 20) {
+      this.warm += 1;
+      this.value = this.warm === 1 ? rms : this.value * 0.8 + rms * 0.2;
+    } else if (rms < this.value) {
+      this.value = this.value * 0.9 + rms * 0.1;
+    } else if (!speaking && rms < this.value * 2.5) {
+      this.value = this.value * 0.985 + rms * 0.015;
+    } else if (!speaking) {
+      this.value *= 1.002;
+    }
+    this.value = Math.min(FLOOR_MAX, Math.max(FLOOR_MIN, this.value));
+  }
+
+  startThreshold(): number {
+    return Math.max(SPEECH_START_RMS, this.value * 3.2);
+  }
+
+  bargeThreshold(): number {
+    return Math.max(BARGE_START_RMS, this.value * 5);
+  }
+
+  continueThreshold(): number {
+    return Math.max(SPEECH_CONTINUE_RMS, this.value * 1.8);
+  }
+}
 
 async function openMicrophone(): Promise<MediaStream> {
   const audio: MediaTrackConstraints = {
@@ -32,7 +89,7 @@ async function openMicrophone(): Promise<MediaStream> {
   }
 }
 
-function isSpeech(samples: Float32Array, sampleRate: number, minRms: number): boolean {
+function isSpeech(samples: Float32Array, sampleRate: number, minRms: number, minScore: number): boolean {
   const length = samples.length;
   if (length < sampleRate * 0.02) {
     return false;
@@ -54,10 +111,11 @@ function isSpeech(samples: Float32Array, sampleRate: number, minRms: number): bo
     return false;
   }
   const zeroCrossingRate = crossings / Math.max(1, length - 1);
-  if (zeroCrossingRate > 0.22) {
+  // Hiss and clicks cross zero very often. A hum barely crosses at all.
+  if (zeroCrossingRate > 0.2 || zeroCrossingRate < 0.004) {
     return false;
   }
-  return pitchScore(samples, length, sampleRate, sum / length) >= VOICE_SCORE;
+  return pitchScore(samples, length, sampleRate, sum / length) >= minScore;
 }
 
 function pitchScore(samples: Float32Array, length: number, sampleRate: number, mean: number): number {
@@ -119,12 +177,21 @@ export class SpeechCapture {
   private sinceCheckMs = 0;
   private voicedRunMs = 0;
   private voicedMs = 0;
+  private sinceLevelMs = 0;
+  private lastVoiced = false;
+  private noise = new NoiseFloor();
   private onUtterance: SpeechHandler;
   private onSpeechStart: () => void;
+  private onLevel: LevelHandler;
 
-  constructor(onUtterance: SpeechHandler, onSpeechStart: () => void = () => undefined) {
+  constructor(
+    onUtterance: SpeechHandler,
+    onSpeechStart: () => void = () => undefined,
+    onLevel: LevelHandler = () => undefined,
+  ) {
     this.onUtterance = onUtterance;
     this.onSpeechStart = onSpeechStart;
+    this.onLevel = onLevel;
   }
 
   async start(): Promise<void> {
@@ -188,6 +255,27 @@ export class SpeechCapture {
     this.stream = null;
     this.context = null;
     this.resetBuffers();
+    this.onLevel({ level: 0, voiced: false, capturing: false });
+  }
+
+  private report(rms: number, frameMs: number, voiced: boolean): void {
+    this.sinceLevelMs += frameMs;
+    if (voiced) {
+      this.lastVoiced = true;
+    }
+    if (this.sinceLevelMs < LEVEL_EVERY_MS) {
+      return;
+    }
+    this.sinceLevelMs = 0;
+    const floor = this.noise.floor;
+    const span = Math.max(0.03, this.noise.startThreshold() * 3);
+    const level = Math.min(1, Math.max(0, (rms - floor) / span));
+    this.onLevel({
+      level: Math.sqrt(level),
+      voiced: this.lastVoiced,
+      capturing: this.speaking || this.holding,
+    });
+    this.lastVoiced = false;
   }
 
   private resetBuffers(): void {
@@ -237,12 +325,14 @@ export class SpeechCapture {
     if (this.holding) {
       this.utterance.push(samples);
       this.speechMs += frameMs;
+      this.report(rms, frameMs, rms >= this.noise.continueThreshold());
       if (this.speechMs >= MAX_UTTERANCE_MS) {
         this.endHold();
       }
       return;
     }
 
+    this.noise.observe(rms, this.speaking);
     this.remember(samples);
     this.sinceCheckMs += frameMs;
     const ready = this.sinceCheckMs >= CHECK_MS && this.recentSamples >= sampleRate * 0.02;
@@ -251,9 +341,15 @@ export class SpeechCapture {
     if (ready) {
       checkedMs = this.sinceCheckMs;
       this.sinceCheckMs = 0;
-      const minRms = this.bargeIn ? BARGE_START_RMS : this.speaking ? SPEECH_CONTINUE_RMS : SPEECH_START_RMS;
-      heardVoice = isSpeech(this.copyWindow(), sampleRate, minRms);
+      const minRms = this.bargeIn
+        ? this.noise.bargeThreshold()
+        : this.speaking
+          ? this.noise.continueThreshold()
+          : this.noise.startThreshold();
+      const minScore = this.bargeIn ? BARGE_VOICE_SCORE : VOICE_SCORE;
+      heardVoice = isSpeech(this.copyWindow(), sampleRate, minRms, minScore);
     }
+    this.report(rms, frameMs, heardVoice);
 
     if (!this.speaking) {
       this.preroll.push(samples);
@@ -295,7 +391,7 @@ export class SpeechCapture {
     if (heardVoice) {
       this.voicedMs += checkedMs;
     }
-    if (rms >= SPEECH_CONTINUE_RMS) {
+    if (rms >= this.noise.continueThreshold()) {
       this.silenceMs = 0;
     } else {
       this.silenceMs += frameMs;
