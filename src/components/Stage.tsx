@@ -61,12 +61,12 @@ export function Stage({
             ))}
           </div>
         ) : heardYou ? (
-          <div className={`rounded-2xl border border-accent/30 bg-card px-6 py-8 shadow-[0_0_32px_rgba(62,197,255,0.08)] ${align}`}>
+          <div className={`rounded-2xl border border-accent/30 bg-card px-5 py-4 ${align}`}>
             <p className="text-xs uppercase tracking-[0.22em] text-accent">Grammar</p>
-            <p className="mt-3 text-4xl font-medium leading-tight tracking-tight">That sounded clear.</p>
+            <p className="mt-2 text-2xl font-medium leading-snug tracking-tight">That sounded clear.</p>
           </div>
         ) : (
-          <p className={`${align} text-2xl font-medium leading-snug tracking-tight text-ink`}>{tollySaid}</p>
+          <p className={`${align} text-xl font-medium leading-snug tracking-tight text-ink`}>{tollySaid}</p>
         )}
       </div>
       {tollySaid && (heardYou || notes.length > 0) && (
@@ -89,15 +89,15 @@ export function Stage({
 function NoteCard({ note, align }: { note: string; align: string }) {
   const parts = splitCorrection(note);
   return (
-    <article className={`rounded-2xl border border-accent/35 bg-card px-6 py-7 shadow-[0_0_32px_rgba(62,197,255,0.08)] ${align}`}>
-      <p className="text-xs uppercase tracking-[0.22em] text-accent">Clearer</p>
+    <article className={`rounded-2xl border border-accent/35 bg-card px-5 py-4 shadow-[0_0_24px_rgba(62,197,255,0.06)] ${align}`}>
+      <p className="text-xs uppercase tracking-[0.18em] text-accent">Clearer</p>
       {parts ? (
         <>
-          <p className="mt-3 text-4xl font-medium leading-tight tracking-tight">{parts.right}</p>
-          <p className="mt-4 text-lg text-muted line-through decoration-accent/70">{parts.wrong}</p>
+          <p className="mt-2 text-2xl font-medium leading-snug tracking-tight">{parts.right}</p>
+          <p className="mt-2 text-base text-muted line-through decoration-accent/70">{parts.wrong}</p>
         </>
       ) : (
-        <p className="mt-3 text-3xl font-medium leading-snug tracking-tight">{note}</p>
+        <p className="mt-2 text-xl font-medium leading-snug tracking-tight">{note}</p>
       )}
     </article>
   );

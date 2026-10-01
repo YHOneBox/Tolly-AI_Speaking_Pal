@@ -74,7 +74,7 @@ pub async fn install<R: Runtime>(app: &AppHandle<R>, http: &reqwest::Client) -> 
     let plan = install_plan()?;
     let download_path = paths::data_dir()?.join(download_name());
     download(app, http, &asset.url, &download_path).await?;
-    spawn_replacer(&plan, &download_path)?;
+    spawn_replacer(&plan, &download_path, release.tag_name.trim_start_matches('v'))?;
     app.exit(0);
     Ok(())
 }
@@ -263,24 +263,52 @@ fn is_dev_build(path: &Path) -> bool {
     text.contains("target/debug")
 }
 
-fn spawn_replacer(plan: &InstallPlan, download: &Path) -> Result<(), ApiError> {
+fn spawn_replacer(plan: &InstallPlan, download: &Path, version: &str) -> Result<(), ApiError> {
     match plan {
-        InstallPlan::ReplaceFile { target } => spawn_file_replace(download, target),
-        InstallPlan::ReplaceMacApp { bundle } => spawn_mac_replace(download, bundle),
+        InstallPlan::ReplaceFile { target } => spawn_file_replace(download, target, version),
+        InstallPlan::ReplaceMacApp { bundle } => spawn_mac_replace(download, bundle, version),
     }
 }
 
+fn versioned_stem(version: &str) -> Result<String, ApiError> {
+    let version = version.trim().trim_start_matches('v');
+    if parse_version(version).is_none() {
+        return Err(ApiError::bad("The latest GitHub release has no version number."));
+    }
+    Ok(format!("Tolly-v{version}"))
+}
+
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+fn versioned_file(current: &Path, version: &str) -> Result<PathBuf, ApiError> {
+    let parent = current
+        .parent()
+        .ok_or_else(|| ApiError::storage("The app folder could not be found."))?;
+    let extension = if cfg!(windows) { "exe" } else { "AppImage" };
+    Ok(parent.join(format!("{}.{}", versioned_stem(version)?, extension)))
+}
+
 #[cfg(windows)]
-fn spawn_file_replace(download: &Path, target: &Path) -> Result<(), ApiError> {
+fn spawn_file_replace(download: &Path, target: &Path, version: &str) -> Result<(), ApiError> {
     use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     const DETACHED_PROCESS: u32 = 0x0000_0008;
+    let renamed = versioned_file(target, version)?;
     let script_path = paths::data_dir()?.join("apply-update.cmd");
+    let remove_old = if !same_path(target, &renamed) {
+        format!(
+            "set /a tries=0\r\n:drop\r\ndel /F /Q \"{}\"\r\nif not exist \"{}\" goto launch\r\nset /a tries+=1\r\nif %tries% lss 15 goto waitdrop\r\ngoto launch\r\n:waitdrop\r\nping 127.0.0.1 -n 2 > nul\r\ngoto drop\r\n",
+            target.display(),
+            target.display()
+        )
+    } else {
+        String::new()
+    };
     let script = format!(
-        "@echo off\r\nset /a tries=0\r\n:retry\r\nping 127.0.0.1 -n 2 > nul\r\nmove /Y \"{}\" \"{}\"\r\nif errorlevel 1 (\r\n  set /a tries+=1\r\n  if %tries% lss 20 goto retry\r\n  exit /b 1\r\n)\r\nstart \"\" \"{}\"\r\n",
+        "@echo off\r\nset /a tries=0\r\n:retry\r\nping 127.0.0.1 -n 2 > nul\r\nmove /Y \"{}\" \"{}\"\r\nif errorlevel 1 (\r\n  set /a tries+=1\r\n  if %tries% lss 20 goto retry\r\n  exit /b 1\r\n)\r\n{}:launch\r\nstart \"\" \"{}\"\r\n",
         download.display(),
-        target.display(),
-        target.display()
+        renamed.display(),
+        remove_old,
+        renamed.display()
     );
     std::fs::write(&script_path, script).map_err(|err| ApiError::storage(err.to_string()))?;
     std::process::Command::new("cmd")
@@ -292,14 +320,21 @@ fn spawn_file_replace(download: &Path, target: &Path) -> Result<(), ApiError> {
 }
 
 #[cfg(all(unix, not(target_os = "macos")))]
-fn spawn_file_replace(download: &Path, target: &Path) -> Result<(), ApiError> {
+fn spawn_file_replace(download: &Path, target: &Path, version: &str) -> Result<(), ApiError> {
+    let renamed = versioned_file(target, version)?;
     let script_path = paths::data_dir()?.join("apply-update.sh");
+    let remove_old = if same_path(target, &renamed) {
+        String::new()
+    } else {
+        format!("rm -f {}\n", shell_quote(target))
+    };
     let script = format!(
-        "#!/bin/sh\ntries=0\nwhile [ \"$tries\" -lt 20 ]; do\n  sleep 1\n  if mv -f {} {}; then\n    chmod +x {}\n    nohup {} >/dev/null 2>&1 &\n    exit 0\n  fi\n  tries=$((tries + 1))\ndone\nexit 1\n",
+        "#!/bin/sh\ntries=0\nwhile [ \"$tries\" -lt 20 ]; do\n  sleep 1\n  if mv -f {} {}; then\n    chmod +x {}\n    {}\n    nohup {} >/dev/null 2>&1 &\n    exit 0\n  fi\n  tries=$((tries + 1))\ndone\nexit 1\n",
         shell_quote(download),
-        shell_quote(target),
-        shell_quote(target),
-        shell_quote(target)
+        shell_quote(&renamed),
+        shell_quote(&renamed),
+        remove_old,
+        shell_quote(&renamed)
     );
     std::fs::write(&script_path, script).map_err(|err| ApiError::storage(err.to_string()))?;
     let _ = std::process::Command::new("chmod").arg("+x").arg(&script_path).status();
@@ -311,22 +346,25 @@ fn spawn_file_replace(download: &Path, target: &Path) -> Result<(), ApiError> {
 }
 
 #[cfg(target_os = "macos")]
-fn spawn_file_replace(_download: &Path, _target: &Path) -> Result<(), ApiError> {
+fn spawn_file_replace(_download: &Path, _target: &Path, _version: &str) -> Result<(), ApiError> {
     Err(ApiError::bad("This Mac build updates the app bundle."))
 }
 
 #[cfg(target_os = "macos")]
-fn spawn_mac_replace(download: &Path, bundle: &Path) -> Result<(), ApiError> {
+fn spawn_mac_replace(download: &Path, bundle: &Path, version: &str) -> Result<(), ApiError> {
     let parent = bundle
         .parent()
         .ok_or_else(|| ApiError::storage("The app folder could not be found."))?;
+    let renamed = parent.join(format!("{}.app", versioned_stem(version)?));
     let script_path = paths::data_dir()?.join("apply-update.sh");
     let script = format!(
-        "#!/bin/sh\nsleep 2\nrm -rf {}\nditto -x -k {} {}\nopen {}\n",
+        "#!/bin/sh\nsleep 2\nrm -rf {}\nditto -x -k {} {}\nmv -f {} {}\nopen {}\n",
         shell_quote(bundle),
         shell_quote(download),
         shell_quote(parent),
-        shell_quote(bundle)
+        shell_quote(&parent.join("Tolly.app")),
+        shell_quote(&renamed),
+        shell_quote(&renamed)
     );
     std::fs::write(&script_path, script).map_err(|err| ApiError::storage(err.to_string()))?;
     let _ = std::process::Command::new("chmod").arg("+x").arg(&script_path).status();
@@ -338,13 +376,18 @@ fn spawn_mac_replace(download: &Path, bundle: &Path) -> Result<(), ApiError> {
 }
 
 #[cfg(not(target_os = "macos"))]
-fn spawn_mac_replace(_download: &Path, _bundle: &Path) -> Result<(), ApiError> {
+fn spawn_mac_replace(_download: &Path, _bundle: &Path, _version: &str) -> Result<(), ApiError> {
     Err(ApiError::bad("This computer updates the app file directly."))
 }
 
 #[cfg(unix)]
 fn shell_quote(path: &Path) -> String {
     format!("'{}'", path.display().to_string().replace('\'', "'\\''"))
+}
+
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+fn same_path(left: &Path, right: &Path) -> bool {
+    left.to_string_lossy().eq_ignore_ascii_case(&right.to_string_lossy())
 }
 
 pub fn is_newer(latest: &str, current: &str) -> bool {
@@ -373,6 +416,13 @@ mod tests {
         assert!(is_newer("0.2.1", "v0.2.0"));
         assert!(!is_newer("v0.2.0", "0.2.0"));
         assert!(!is_newer("v0.1.9", "0.2.0"));
+    }
+
+    #[test]
+    fn an_update_file_uses_the_new_version_name() {
+        assert_eq!(versioned_stem("v1.2.0").unwrap(), "Tolly-v1.2.0");
+        assert_eq!(versioned_stem("1.2.0").unwrap(), "Tolly-v1.2.0");
+        assert!(versioned_stem("not-a-version").is_err());
     }
 
     #[test]

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 
-import { Composer } from "./components/Composer";
+import { Presence, TalkButton } from "./components/Composer";
 import { RateLimitBanner } from "./components/RateLimitBanner";
 import { SettingsModal } from "./components/SettingsModal";
 import { Stage } from "./components/Stage";
@@ -32,7 +32,7 @@ import {
 } from "./types";
 
 const EMPTY_SESSION: Bootstrap = {
-  version: "1.0.0",
+  version: "1.0.1",
   groqConfigured: false,
   cartesiaConfigured: false,
   preferences: DEFAULT_PREFERENCES,
@@ -558,15 +558,10 @@ export default function App() {
   const budget = session.preferences.dailyTokenBudget;
   const ready = session.groqConfigured && session.cartesiaConfigured;
   const shell = layout === "center" ? "max-w-3xl" : "max-w-5xl";
-  const facing = heardYou || Boolean(tollySaid);
   const scene =
     layout === "split"
-      ? "grid items-center gap-10 md:grid-cols-[minmax(0,1fr)_auto] md:items-start"
-      : facing
-        ? "flex flex-col items-center justify-start gap-8"
-        : "flex flex-col items-center justify-center gap-8";
-  const bodyClass =
-    layout === "split" ? "order-1 justify-self-center md:sticky md:top-8 md:order-2" : facing ? "sticky top-4 z-10" : "";
+      ? "grid items-start gap-8 md:grid-cols-[minmax(0,1fr)_auto]"
+      : "flex w-full flex-col items-center gap-8";
   const stage = (
     <Stage
       layout={layout}
@@ -599,7 +594,7 @@ export default function App() {
               }
             >
               <p className="text-[0.65rem] uppercase tracking-[0.16em] text-muted">Speaking</p>
-              <p className="text-3xl font-medium leading-none tracking-tight text-accent">{skillRating ?? "—"}</p>
+              <p className="text-2xl font-medium leading-none tracking-tight text-accent">{skillRating ?? "—"}</p>
               <p className="text-xs text-muted">{skillRating === null ? "Not yet" : speakingBand(skillRating)}</p>
             </div>
             <p className={budgetNote ? "text-sm text-accent" : "hidden text-sm text-muted sm:block"}>
@@ -639,21 +634,24 @@ export default function App() {
       {rateLimit && <RateLimitBanner error={rateLimit} onDismiss={() => setRateLimit(null)} />}
       <main className="relative min-h-0 flex-1 overflow-y-auto">
         <div className="tech-grid pointer-events-none absolute inset-0" aria-hidden="true" />
-        <div className={`relative mx-auto min-h-full ${shell} px-6 py-8 ${scene}`}>
+        <div className={`relative mx-auto w-full ${shell} px-6 py-6 ${scene}`}>
           {layout === "split" && <div className="order-2 min-w-0 w-full md:order-1">{stage}</div>}
-          <div className={bodyClass}>
-            <Composer
-              phase={phase}
-              notice={notice}
-              micOpen={micOpen}
-              onShortPress={() => void onShortPress()}
-              onHoldStart={() => void holdStart()}
-              onHoldEnd={() => void holdEnd()}
-            />
+          <div className={layout === "split" ? "order-1 md:order-2" : ""}>
+            <Presence phase={phase} micOpen={micOpen} />
           </div>
           {layout !== "split" && <div className="w-full">{stage}</div>}
         </div>
       </main>
+      <footer className="border-t border-line bg-paper/95 px-6 py-3">
+        <TalkButton
+          phase={phase}
+          notice={notice}
+          micOpen={micOpen}
+          onShortPress={() => void onShortPress()}
+          onHoldStart={() => void holdStart()}
+          onHoldEnd={() => void holdEnd()}
+        />
+      </footer>
       {settingsOpen && (
         <SettingsModal
           session={session}

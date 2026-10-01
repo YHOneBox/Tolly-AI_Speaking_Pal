@@ -115,7 +115,7 @@ export function normalizeFontSize(value: number | undefined): number {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return 16;
   }
-  return Math.min(22, Math.max(14, Math.round(value)));
+  return Math.min(20, Math.max(11, Math.round(value)));
 }
 
 export function normalizeLayout(value: string | undefined): AppLayout {

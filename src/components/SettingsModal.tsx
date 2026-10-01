@@ -401,8 +401,8 @@ export function SettingsModal({
             <div className="mt-3">
               <SliderField
                 label="Font size"
-                min={14}
-                max={22}
+                min={11}
+                max={20}
                 step={1}
                 digits={0}
                 value={preferences.fontSize}

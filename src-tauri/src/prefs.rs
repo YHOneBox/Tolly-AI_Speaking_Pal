@@ -57,7 +57,7 @@ fn default_layout() -> String {
 }
 
 pub fn clamp_font_size(value: u8) -> u8 {
-    value.clamp(14, 22)
+    value.clamp(11, 20)
 }
 
 pub fn normalize_layout(value: &str) -> String {
@@ -179,8 +179,8 @@ pub fn validate(prefs: &Preferences) -> Result<(), ApiError> {
     if (prefs.voice_volume - clamp_voice_volume(prefs.voice_volume)).abs() > 0.001 {
         return Err(ApiError::bad("Speaking volume must be between 0% and 100%."));
     }
-    if !(14..=22).contains(&prefs.font_size) {
-        return Err(ApiError::bad("Font size must be between 14 and 22."));
+    if !(11..=20).contains(&prefs.font_size) {
+        return Err(ApiError::bad("Font size must be between 11 and 20."));
     }
     if prefs.layout != "center" && prefs.layout != "wide" && prefs.layout != "split" {
         return Err(ApiError::bad("Choose a centered, wide, or split layout."));

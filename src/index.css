@@ -46,14 +46,10 @@ textarea {
 .presence {
   position: relative;
   display: grid;
-  width: min(16.5rem, 46vw);
-  height: min(16.5rem, 46vw);
+  width: min(9.5rem, 28vw, 26vh);
+  height: min(9.5rem, 28vw, 26vh);
   place-items: center;
-  border: 0;
-  background: transparent;
-  padding: 0;
-  touch-action: none;
-  user-select: none;
+  pointer-events: none;
 }
 
 .presence-halo {
@@ -245,4 +241,29 @@ textarea {
   .presence-bars span {
     animation: none;
   }
+}
+
+.talk-control {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.55rem;
+  min-width: 7.5rem;
+  border: 1px solid rgba(120, 210, 255, 0.55);
+  border-radius: 999px;
+  background: #102033;
+  color: #e8f4ff;
+  padding: 0.55rem 1.15rem;
+  box-shadow: 0 0 18px rgba(40, 160, 255, 0.18);
+  touch-action: none;
+  user-select: none;
+}
+
+.talk-control.is-live,
+.talk-control.is-holding {
+  box-shadow: 0 0 0 4px rgba(62, 197, 255, 0.18), 0 0 18px rgba(40, 160, 255, 0.28);
+}
+
+.talk-control.is-speaking {
+  border-color: rgba(232, 244, 255, 0.8);
 }

@@ -44,6 +44,7 @@ pub fn run() {
                 .cloned()
                 .ok_or_else(|| std::io::Error::other("Tolly has no window configuration."))?;
             tauri::WebviewWindowBuilder::from_config(app.handle(), &config)?
+                .title(format!("Tolly {}", env!("CARGO_PKG_VERSION")))
                 .data_directory(data.join("webview"))
                 .build()?;
             Ok(())
