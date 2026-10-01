@@ -4,10 +4,101 @@ const BARGE_START_RMS = 0.06;
 const SPEECH_CONTINUE_RMS = 0.01;
 const SILENCE_MS = 700;
 const MIN_SPEECH_MS = 280;
+const MIN_VOICED_MS = 140;
+const SPEECH_VOICE_MS = 160;
+const BARGE_VOICE_MS = 280;
 const MAX_UTTERANCE_MS = 15_000;
 const PREROLL_MS = 280;
+const CHECK_MS = 24;
+const WINDOW_MS = 32;
+const VOICE_SCORE = 0.3;
 
 type SpeechHandler = (wav: Uint8Array) => void;
+
+async function openMicrophone(): Promise<MediaStream> {
+  const audio: MediaTrackConstraints = {
+    channelCount: 1,
+    echoCancellation: true,
+    noiseSuppression: true,
+    autoGainControl: true,
+  };
+  try {
+    return await navigator.mediaDevices.getUserMedia({
+      audio: { ...audio, voiceIsolation: true } as MediaTrackConstraints,
+      video: false,
+    });
+  } catch {
+    return navigator.mediaDevices.getUserMedia({ audio, video: false });
+  }
+}
+
+function isSpeech(samples: Float32Array, sampleRate: number, minRms: number): boolean {
+  const length = samples.length;
+  if (length < sampleRate * 0.02) {
+    return false;
+  }
+  let sum = 0;
+  let energy = 0;
+  let crossings = 0;
+  let previous = samples[0] ?? 0;
+  for (let index = 0; index < length; index += 1) {
+    const sample = samples[index] ?? 0;
+    sum += sample;
+    energy += sample * sample;
+    if (index > 0 && (sample >= 0) !== (previous >= 0)) {
+      crossings += 1;
+    }
+    previous = sample;
+  }
+  if (Math.sqrt(energy / length) < minRms) {
+    return false;
+  }
+  const zeroCrossingRate = crossings / Math.max(1, length - 1);
+  if (zeroCrossingRate > 0.22) {
+    return false;
+  }
+  return pitchScore(samples, length, sampleRate, sum / length) >= VOICE_SCORE;
+}
+
+function pitchScore(samples: Float32Array, length: number, sampleRate: number, mean: number): number {
+  const minLag = Math.max(2, Math.floor(sampleRate / 400));
+  const maxLag = Math.min(length - 2, Math.floor(sampleRate / 80));
+  if (maxLag <= minLag) {
+    return 0;
+  }
+  let energy = 0;
+  for (let index = 0; index < length; index += 1) {
+    const sample = (samples[index] ?? 0) - mean;
+    energy += sample * sample;
+  }
+  if (energy < 1e-8) {
+    return 0;
+  }
+  let best = 0;
+  let total = 0;
+  let count = 0;
+  for (let lag = minLag; lag <= maxLag; lag += 2) {
+    let correlation = 0;
+    const limit = length - lag;
+    for (let index = 0; index < limit; index += 2) {
+      correlation += ((samples[index] ?? 0) - mean) * ((samples[index + lag] ?? 0) - mean);
+    }
+    correlation *= 2;
+    total += correlation;
+    count += 1;
+    if (correlation > best) {
+      best = correlation;
+    }
+  }
+  if (count === 0 || best <= 0) {
+    return 0;
+  }
+  const average = total / count;
+  if (best < average * 1.6) {
+    return 0;
+  }
+  return best / energy;
+}
 
 export class SpeechCapture {
   private context: AudioContext | null = null;
@@ -23,6 +114,11 @@ export class SpeechCapture {
   private prerollMs = 0;
   private preroll: Float32Array[] = [];
   private utterance: Float32Array[] = [];
+  private recent: Float32Array[] = [];
+  private recentSamples = 0;
+  private sinceCheckMs = 0;
+  private voicedRunMs = 0;
+  private voicedMs = 0;
   private onUtterance: SpeechHandler;
   private onSpeechStart: () => void;
 
@@ -32,15 +128,7 @@ export class SpeechCapture {
   }
 
   async start(): Promise<void> {
-    this.stream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        channelCount: 1,
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
-      },
-      video: false,
-    });
+    this.stream = await openMicrophone();
     this.context = new AudioContext();
     await this.context.audioWorklet.addModule("/vad-worklet.js");
     this.source = this.context.createMediaStreamSource(this.stream);
@@ -107,8 +195,36 @@ export class SpeechCapture {
     this.silenceMs = 0;
     this.speechMs = 0;
     this.prerollMs = 0;
+    this.voicedRunMs = 0;
+    this.voicedMs = 0;
+    this.sinceCheckMs = 0;
     this.preroll = [];
     this.utterance = [];
+    this.recent = [];
+    this.recentSamples = 0;
+  }
+
+  private remember(samples: Float32Array): void {
+    this.recent.push(samples);
+    this.recentSamples += samples.length;
+    const sampleRate = this.context?.sampleRate ?? 48_000;
+    const maxSamples = Math.floor(sampleRate * (WINDOW_MS / 1000));
+    while (this.recentSamples > maxSamples && this.recent.length > 1) {
+      const removed = this.recent.shift();
+      if (removed) {
+        this.recentSamples -= removed.length;
+      }
+    }
+  }
+
+  private copyWindow(): Float32Array {
+    const window = new Float32Array(this.recentSamples);
+    let offset = 0;
+    for (const chunk of this.recent) {
+      window.set(chunk, offset);
+      offset += chunk.length;
+    }
+    return window;
   }
 
   private consume(rms: number, samples: Float32Array): void {
@@ -127,6 +243,18 @@ export class SpeechCapture {
       return;
     }
 
+    this.remember(samples);
+    this.sinceCheckMs += frameMs;
+    const ready = this.sinceCheckMs >= CHECK_MS && this.recentSamples >= sampleRate * 0.02;
+    let heardVoice = false;
+    let checkedMs = 0;
+    if (ready) {
+      checkedMs = this.sinceCheckMs;
+      this.sinceCheckMs = 0;
+      const minRms = this.bargeIn ? BARGE_START_RMS : this.speaking ? SPEECH_CONTINUE_RMS : SPEECH_START_RMS;
+      heardVoice = isSpeech(this.copyWindow(), sampleRate, minRms);
+    }
+
     if (!this.speaking) {
       this.preroll.push(samples);
       this.prerollMs += frameMs;
@@ -136,24 +264,37 @@ export class SpeechCapture {
           this.prerollMs -= (removed.length / sampleRate) * 1000;
         }
       }
-      const startAt = this.bargeIn ? BARGE_START_RMS : SPEECH_START_RMS;
-      if (rms >= startAt) {
-        if (this.bargeIn) {
-          this.bargeIn = false;
-          this.onSpeechStart();
-        }
-        this.speaking = true;
-        this.utterance = this.preroll.splice(0);
-        this.speechMs = this.prerollMs;
-        this.preroll = [];
-        this.prerollMs = 0;
-        this.silenceMs = 0;
+      if (!ready) {
+        return;
       }
+      if (heardVoice) {
+        this.voicedRunMs += checkedMs;
+      } else {
+        this.voicedRunMs = 0;
+      }
+      const need = this.bargeIn ? BARGE_VOICE_MS : SPEECH_VOICE_MS;
+      if (this.voicedRunMs < need) {
+        return;
+      }
+      if (this.bargeIn) {
+        this.bargeIn = false;
+        this.onSpeechStart();
+      }
+      this.speaking = true;
+      this.utterance = this.preroll.splice(0);
+      this.speechMs = this.prerollMs;
+      this.voicedMs = this.voicedRunMs;
+      this.preroll = [];
+      this.prerollMs = 0;
+      this.silenceMs = 0;
       return;
     }
 
     this.utterance.push(samples);
     this.speechMs += frameMs;
+    if (heardVoice) {
+      this.voicedMs += checkedMs;
+    }
     if (rms >= SPEECH_CONTINUE_RMS) {
       this.silenceMs = 0;
     } else {
@@ -165,7 +306,7 @@ export class SpeechCapture {
       return;
     }
 
-    const heardEnough = this.speechMs - this.silenceMs >= MIN_SPEECH_MS;
+    const heardEnough = this.speechMs - this.silenceMs >= MIN_SPEECH_MS && this.voicedMs >= MIN_VOICED_MS;
     const captured = concatFloats(this.utterance);
     this.resetBuffers();
     if (!heardEnough) {

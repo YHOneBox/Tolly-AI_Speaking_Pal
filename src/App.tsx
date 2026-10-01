@@ -32,7 +32,7 @@ import {
 } from "./types";
 
 const EMPTY_SESSION: Bootstrap = {
-  version: "1.0.1",
+  version: "1.0.2",
   groqConfigured: false,
   cartesiaConfigured: false,
   preferences: DEFAULT_PREFERENCES,
