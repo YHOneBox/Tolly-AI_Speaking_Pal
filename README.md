@@ -20,7 +20,7 @@ The model is instructed to return only:
 }
 ```
 
-The main view is Tolly: a round body in the center. Tap it to listen, hold it while you speak, and talk over Tolly to cut in. Grammar notes from `visual_feedback` appear under the body, or on the left in the split layout. `spoken_reply` is what Cartesia says. Settings can change the voice, speaking speed, speaking volume, font size, and layout, and can download a newer release from GitHub. A `429` from Groq or Cartesia is shown as a rate-limit notice. Calls stop once today's token budget is spent.
+The main view is Tolly: a tech-style circle in the center. The window icon still comes from `logo.png`, and that picture is not drawn inside the circle. Tap the circle to listen, hold it while you speak, and talk over Tolly to cut in. Grammar notes from `visual_feedback` appear under the circle, or on the left in the split layout. `spoken_reply` is what Cartesia says. Settings can change the voice, speaking speed, speaking volume, font size, and layout, and can download a newer release from GitHub. Speaking volume is the playback level, from 0% to 100%. A `429` from Groq or Cartesia is shown as a rate-limit notice. Calls stop once today's token budget is spent.
 
 ## Portable builds
 
@@ -58,19 +58,19 @@ Rust 1.77 or newer and Node 20 or newer are required. Tolly keeps its `data` fol
 
 ## GitHub release
 
-This copy is 0.3.0. Push `main` to [YHOneBox/Tolly-AI_Speaking_Pal](https://github.com/YHOneBox/Tolly-AI_Speaking_Pal), then push a version tag. The tag must match `src-tauri/tauri.conf.json`, and the same version in `package.json` and `src-tauri/Cargo.toml`. The in-app updater only accepts files from that repository.
+This copy is 1.0.0. Push `main` to [YHOneBox/Tolly-AI_Speaking_Pal](https://github.com/YHOneBox/Tolly-AI_Speaking_Pal), then push a version tag. The tag must match `src-tauri/tauri.conf.json`, and the same version in `package.json` and `src-tauri/Cargo.toml`. The in-app updater only accepts files from that repository.
 
 ```bash
-git push -u origin main
-git tag v0.3.0
-git push origin v0.3.0
+git push origin main
+git tag v1.0.0
+git push origin v1.0.0
 ```
 
 The workflow publishes:
 
-- `Tolly-v0.3.0-windows-x64.exe`
-- `Tolly-v0.3.0-macos.dmg` and a zipped `.app`
-- `Tolly-v0.3.0-linux-x64.AppImage`
+- `Tolly-v1.0.0-windows-x64.exe`
+- `Tolly-v1.0.0-macos.dmg` and a zipped `.app`
+- `Tolly-v1.0.0-linux-x64.AppImage`
 
 It does not build an MSI or an NSIS setup.
 

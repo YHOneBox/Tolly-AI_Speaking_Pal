@@ -32,7 +32,7 @@ import {
 } from "./types";
 
 const EMPTY_SESSION: Bootstrap = {
-  version: "0.3.0",
+  version: "1.0.0",
   groqConfigured: false,
   cartesiaConfigured: false,
   preferences: DEFAULT_PREFERENCES,
@@ -337,6 +337,7 @@ export default function App() {
 
     const turnId = crypto.randomUUID();
     const playback = player();
+    playback.setVolume(session.preferences.voiceVolume);
     playback.resume();
     playback.stop();
     setPhase("speaking");

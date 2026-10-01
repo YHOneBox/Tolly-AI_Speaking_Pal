@@ -229,6 +229,7 @@ export function SettingsModal({
     setPreviewing(true);
     const player = previewPlayer.current ?? new PcmPlayer();
     previewPlayer.current = player;
+    player.setVolume(preferences.voiceVolume);
     player.resume();
     player.stop();
     try {
@@ -377,12 +378,15 @@ export function SettingsModal({
           />
           <SliderField
             label="Speaking volume"
-            min={0.5}
-            max={2}
-            step={0.05}
-            value={preferences.voiceVolume}
-            suffix="×"
-            onChange={(voiceVolume) => setPreferences((current) => ({ ...current, voiceVolume }))}
+            min={0}
+            max={100}
+            step={1}
+            digits={0}
+            value={Math.round(preferences.voiceVolume * 100)}
+            suffix="%"
+            onChange={(percent) =>
+              setPreferences((current) => ({ ...current, voiceVolume: Math.min(1, Math.max(0, percent / 100)) }))
+            }
           />
           <button
             type="button"

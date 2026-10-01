@@ -93,14 +93,18 @@ export function Composer({
         <span className="presence-ring" />
         <span className="presence-ring-inner" />
         <span className="presence-core">
-          <img src="/icon.png" alt="" />
-          {speaking && (
+          <span className="presence-ticks" />
+          <span className="presence-sweep" />
+          {speaking ? (
             <span className="presence-bars" aria-hidden="true">
               <span />
               <span />
               <span />
               <span />
+              <span />
             </span>
+          ) : (
+            <span className="presence-nucleus" />
           )}
         </span>
       </button>

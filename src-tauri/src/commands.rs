@@ -178,7 +178,6 @@ pub async fn speak(
         &transcript,
         &preferences.voice_id,
         preferences.voice_speed,
-        preferences.voice_volume,
         &turn_id,
         &generation,
         generation_at_start,
@@ -197,7 +196,8 @@ pub async fn preview_voice(
 ) -> Result<(), ApiError> {
     prefs::validate_voice(&voice_id)?;
     let speed = prefs::clamp_voice_speed(voice_speed);
-    let volume = prefs::clamp_voice_volume(voice_volume);
+    // The webview scales playback. Cartesia cannot go quieter than half volume.
+    let _ = voice_volume;
     let http = state.http.clone();
     let generation = Arc::clone(&state.speech_generation);
     let generation_at_start = generation.fetch_add(1, Ordering::SeqCst).saturating_add(1);
@@ -209,7 +209,6 @@ pub async fn preview_voice(
         "Hey. It's good to hear you.",
         &voice_id,
         speed,
-        volume,
         &turn_id,
         &generation,
         generation_at_start,

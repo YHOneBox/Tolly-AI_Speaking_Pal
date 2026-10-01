@@ -180,6 +180,12 @@ export class PcmPlayer {
   private context: AudioContext | null = null;
   private nextTime = 0;
   private nodes: AudioBufferSourceNode[] = [];
+  private gain = 1;
+
+  setVolume(level: number): void {
+    const clamped = Number.isFinite(level) ? Math.min(1, Math.max(0, level)) : 1;
+    this.gain = clamped * clamped;
+  }
 
   resume(): void {
     if (!this.context || this.context.state === "closed") {
@@ -211,8 +217,9 @@ export class PcmPlayer {
     const frames = usable / 2;
     const buffer = context.createBuffer(1, frames, sampleRate);
     const channel = buffer.getChannelData(0);
+    const gain = this.gain;
     for (let index = 0; index < frames; index += 1) {
-      channel[index] = view.getInt16(index * 2, true) / 32768;
+      channel[index] = (view.getInt16(index * 2, true) / 32768) * gain;
     }
     const source = context.createBufferSource();
     source.buffer = buffer;

@@ -138,7 +138,6 @@ pub async fn stream_speech<R: Runtime>(
     transcript: &str,
     voice_id: &str,
     voice_speed: f64,
-    voice_volume: f64,
     turn_id: &str,
     generation: &Arc<AtomicU64>,
     generation_at_start: u64,
@@ -160,7 +159,8 @@ pub async fn stream_speech<R: Runtime>(
             "language": "en",
             "generation_config": {
                 "speed": voice_speed,
-                "volume": voice_volume,
+                // Playback loudness is applied in the webview. This API stops at 0.5x.
+                "volume": 1.0,
             },
             "output_format": {
                 "container": "raw",

@@ -87,30 +87,66 @@ textarea {
 
 .presence-core {
   position: relative;
-  width: 58%;
-  height: 58%;
+  display: grid;
+  width: 62%;
+  height: 62%;
+  place-items: center;
   overflow: hidden;
   border-radius: 999px;
+  background:
+    radial-gradient(circle at 50% 36%, rgba(150, 226, 255, 0.42), transparent 28%),
+    radial-gradient(circle at 50% 58%, rgba(18, 92, 160, 0.55), #071018 72%);
   box-shadow:
-    0 0 0 1px rgba(160, 230, 255, 0.55),
-    0 0 42px rgba(40, 160, 255, 0.38),
-    inset 0 0 24px rgba(62, 197, 255, 0.18);
+    0 0 0 1px rgba(160, 230, 255, 0.7),
+    0 0 36px rgba(40, 160, 255, 0.42),
+    inset 0 0 28px rgba(62, 197, 255, 0.22);
   transition: transform 160ms ease;
 }
 
-.presence-core img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  transform: scale(1.12);
+.presence-ticks,
+.presence-sweep,
+.presence-nucleus {
+  position: absolute;
+  border-radius: 999px;
+  pointer-events: none;
+}
+
+.presence-ticks {
+  inset: 12%;
+  background: repeating-conic-gradient(
+    from 0deg,
+    rgba(186, 236, 255, 0.9) 0 1.6deg,
+    transparent 1.6deg 18deg
+  );
+  mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 2px));
+}
+
+.presence-sweep {
+  inset: 18%;
+  background: conic-gradient(from 0deg, transparent 0 62%, rgba(232, 248, 255, 0.95) 78%, transparent 100%);
+  mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 1px));
+  animation: presence-spin 8s linear infinite;
+}
+
+.presence-nucleus {
+  width: 22%;
+  height: 22%;
+  background: radial-gradient(circle, #f7fdff 0%, #8adfff 42%, rgba(62, 197, 255, 0) 72%);
+  box-shadow: 0 0 18px rgba(120, 214, 255, 0.85);
+  animation: presence-breathe 2.8s ease-in-out infinite;
 }
 
 .presence.is-holding .presence-core {
   transform: scale(0.96);
 }
 
-.presence.is-live .presence-ring {
-  animation-duration: 4.5s;
+.presence.is-live .presence-ring,
+.presence.is-live .presence-sweep {
+  animation-duration: 3.2s;
+}
+
+.presence.is-live .presence-nucleus {
+  animation-duration: 1.1s;
 }
 
 .presence.is-live .presence-halo,
@@ -118,50 +154,47 @@ textarea {
   animation: presence-pulse 1.6s ease-out infinite;
 }
 
-.presence.is-speaking .presence-ring {
-  animation-duration: 1.8s;
+.presence.is-speaking .presence-ring,
+.presence.is-speaking .presence-sweep {
+  animation-duration: 1.6s;
 }
 
 .presence.is-speaking .presence-core {
   box-shadow:
-    0 0 0 1px rgba(210, 245, 255, 0.8),
-    0 0 64px rgba(62, 197, 255, 0.55);
+    0 0 0 1px rgba(210, 245, 255, 0.9),
+    0 0 64px rgba(62, 197, 255, 0.6),
+    inset 0 0 32px rgba(62, 197, 255, 0.35);
 }
 
-.presence.is-thinking .presence-ring-inner {
-  animation-duration: 6s;
+.presence.is-thinking .presence-sweep {
+  animation-duration: 2.4s;
 }
 
 .presence-bars {
-  position: absolute;
-  right: 0;
-  bottom: 12%;
-  left: 0;
+  position: relative;
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   justify-content: center;
-  gap: 4px;
-  height: 28%;
-  background: linear-gradient(transparent, rgba(4, 12, 24, 0.72));
+  gap: 5px;
+  height: 34%;
 }
 
 .presence-bars span {
   width: 3px;
+  height: 28%;
   border-radius: 999px;
-  background: #e8f4ff;
+  background: #f4fbff;
+  box-shadow: 0 0 8px rgba(160, 230, 255, 0.9);
   animation: presence-bar 0.9s ease-in-out infinite;
 }
 
-.presence-bars span:nth-child(2) {
+.presence-bars span:nth-child(2),
+.presence-bars span:nth-child(4) {
   animation-delay: 0.15s;
 }
 
 .presence-bars span:nth-child(3) {
-  animation-delay: 0.3s;
-}
-
-.presence-bars span:nth-child(4) {
-  animation-delay: 0.08s;
+  animation-delay: 0.28s;
 }
 
 @keyframes presence-spin {
@@ -181,6 +214,18 @@ textarea {
   }
 }
 
+@keyframes presence-breathe {
+  0%,
+  100% {
+    transform: scale(0.86);
+    opacity: 0.75;
+  }
+  50% {
+    transform: scale(1.08);
+    opacity: 1;
+  }
+}
+
 @keyframes presence-bar {
   0%,
   100% {
@@ -195,6 +240,8 @@ textarea {
   .presence-ring,
   .presence-ring-inner,
   .presence-halo,
+  .presence-sweep,
+  .presence-nucleus,
   .presence-bars span {
     animation: none;
   }
