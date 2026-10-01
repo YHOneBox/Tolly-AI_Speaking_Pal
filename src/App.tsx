@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 
-import { Presence } from "./components/Avatar";
 import { TalkDock } from "./components/Composer";
 import { RateLimitBanner } from "./components/RateLimitBanner";
 import { SettingsModal } from "./components/SettingsModal";
@@ -35,7 +34,7 @@ import {
 const QUIET: MicLevel = { level: 0, voiced: false, capturing: false };
 
 const EMPTY_SESSION: Bootstrap = {
-  version: "1.1.0",
+  version: "1.1.1",
   groqConfigured: false,
   cartesiaConfigured: false,
   preferences: DEFAULT_PREFERENCES,
@@ -154,6 +153,31 @@ export default function App() {
     };
   }, [desktop, updating]);
 
+  const inputDeviceId = session.preferences.inputDeviceId;
+  const micSensitivity = session.preferences.micSensitivity;
+  useEffect(() => {
+    const capture = captureRef.current;
+    if (!capture) {
+      return;
+    }
+    capture.setSensitivity(micSensitivity);
+    if (capture.deviceId === (inputDeviceId ?? "")) {
+      return;
+    }
+    // A different microphone was chosen. Reopen it, and keep listening if we were.
+    const wasListening = listeningRef.current;
+    void (async () => {
+      await releaseMic();
+      if (wasListening) {
+        await startContinuous();
+      }
+    })();
+  }, [inputDeviceId, micSensitivity]);
+
+  useEffect(() => {
+    playerRef.current?.setOutput(session.preferences.outputDeviceId);
+  }, [session.preferences.outputDeviceId]);
+
   useEffect(() => {
     return () => {
       void captureRef.current?.stop();
@@ -233,6 +257,10 @@ export default function App() {
         (wav) => onUtteranceRef.current(wav),
         () => onSpeechStartRef.current(),
         (level) => setReading(level),
+        {
+          deviceId: sessionRef.current.preferences.inputDeviceId,
+          sensitivity: sessionRef.current.preferences.micSensitivity,
+        },
       );
       await capture.start();
       captureRef.current = capture;
@@ -347,6 +375,7 @@ export default function App() {
     const turnId = crypto.randomUUID();
     const playback = player();
     playback.setVolume(sessionRef.current.preferences.voiceVolume);
+    playback.setOutput(sessionRef.current.preferences.outputDeviceId);
     playback.resume();
     playback.stop();
     setPhase("speaking");
@@ -672,13 +701,11 @@ export default function App() {
       )}
       {rateLimit && <RateLimitBanner error={rateLimit} onDismiss={() => setRateLimit(null)} />}
       <main className="min-h-0 flex-1 overflow-y-auto">
-        <div className={`mx-auto flex w-full ${shell} flex-col items-center gap-6 px-6 pt-4 pb-8`}>
-          <div className="flex flex-col items-center gap-3">
-            <Presence phase={phase} level={reading.level} />
-            <p className="text-sm text-muted" aria-live="polite">
-              {status}
-            </p>
-          </div>
+        <div className={`mx-auto flex w-full ${shell} flex-col items-center gap-4 px-6 pt-2 pb-8`}>
+          <p className="flex items-center gap-2 text-sm text-muted" aria-live="polite">
+            <span className={`status-dot is-${phase}`} aria-hidden="true" />
+            {status}
+          </p>
           <Stage
             layout={layout}
             phase={phase}

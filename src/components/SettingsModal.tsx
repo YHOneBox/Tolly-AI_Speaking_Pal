@@ -1,7 +1,15 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 
 import { clearCredentials, listGroqModels, listVoices, previewVoice, saveSettings, type UpdateOffer } from "../lib/api";
-import { decodeBase64, PcmPlayer } from "../lib/audio";
+import {
+  decodeBase64,
+  listAudioDevices,
+  PcmPlayer,
+  SpeechCapture,
+  supportsOutputSelection,
+  type AudioDevices,
+  type MicLevel,
+} from "../lib/audio";
 import { isDesktopShell, toCommandError } from "../lib/errors";
 import {
   DEFAULT_CHAT_MODEL,
@@ -12,13 +20,16 @@ import {
   modelLabel,
   normalizeFontSize,
   normalizeLayout,
+  normalizeSensitivity,
   preferModel,
   type AppLayout,
   type Bootstrap,
   type ListedModel,
+  type MicSensitivity,
   type Preferences,
   type VoiceOption,
 } from "../types";
+import { VoiceBar } from "./VoiceBar";
 
 type SettingsModalProps = {
   session: Bootstrap;
@@ -34,6 +45,16 @@ type SettingsModalProps = {
   onAppearance: (appearance: { fontSize: number; layout: AppLayout }) => void;
 };
 
+type Tab = "keys" | "voice" | "mic" | "look" | "about";
+
+const TABS: { id: Tab; label: string }[] = [
+  { id: "keys", label: "Keys" },
+  { id: "voice", label: "Voice" },
+  { id: "mic", label: "Microphone" },
+  { id: "look", label: "Look" },
+  { id: "about", label: "About" },
+];
+
 export function SettingsModal({
   session,
   update,
@@ -48,12 +69,16 @@ export function SettingsModal({
   onAppearance,
 }: SettingsModalProps) {
   const titleId = useId();
+  const [tab, setTab] = useState<Tab>(session.groqConfigured && session.cartesiaConfigured ? "voice" : "keys");
   const [groqKey, setGroqKey] = useState("");
   const [cartesiaKey, setCartesiaKey] = useState("");
   const [preferences, setPreferences] = useState<Preferences>(() => ({
     ...session.preferences,
     fontSize: normalizeFontSize(session.preferences.fontSize),
     layout: normalizeLayout(session.preferences.layout),
+    micSensitivity: normalizeSensitivity(session.preferences.micSensitivity),
+    inputDeviceId: session.preferences.inputDeviceId ?? "",
+    outputDeviceId: session.preferences.outputDeviceId ?? "",
   }));
   const [voices, setVoices] = useState<VoiceOption[]>([]);
   const [voicesError, setVoicesError] = useState<string | null>(null);
@@ -230,6 +255,7 @@ export function SettingsModal({
     const player = previewPlayer.current ?? new PcmPlayer();
     previewPlayer.current = player;
     player.setVolume(preferences.voiceVolume);
+    player.setOutput(preferences.outputDeviceId);
     player.resume();
     player.stop();
     try {
@@ -290,115 +316,155 @@ export function SettingsModal({
   }
 
   return (
-    <div className="fixed inset-0 z-20 grid place-items-center bg-black/70 px-4" onMouseDown={onClose}>
+    <div className="fixed inset-0 z-20 grid place-items-center bg-black/70 px-4 py-6" onMouseDown={onClose}>
       <div
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
-        className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-3xl border border-line bg-card p-6 shadow-xl"
+        className="flex max-h-full w-full max-w-xl flex-col overflow-hidden rounded-3xl border border-line bg-card shadow-xl"
         onMouseDown={(event) => event.stopPropagation()}
       >
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <h2 id={titleId} className="text-xl font-semibold tracking-tight">
-              Settings
-            </h2>
-            <p className="mt-1 text-sm leading-6 text-muted">
-              Keys stay in the data folder next to Tolly. A Groq key loads the chat and speech models it can use. Cartesia speaks the reply.
-            </p>
-          </div>
-          <button type="button" className="text-sm text-muted hover:text-ink" onClick={onClose}>
-            Close
+        <div className="flex items-center justify-between gap-4 px-6 pt-5">
+          <h2 id={titleId} className="text-xl font-semibold tracking-tight">
+            Settings
+          </h2>
+          <button
+            type="button"
+            className="pill grid h-8 w-8 place-items-center rounded-full text-muted hover:text-ink"
+            aria-label="Close settings"
+            onClick={onClose}
+          >
+            <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+              <path d="M6 6l12 12M18 6 6 18" />
+            </svg>
           </button>
         </div>
 
-        {!desktop && (
-          <p className="mt-4 rounded-xl bg-note px-3 py-2 text-sm">
-            This window is the browser preview. Saving keys and detecting models runs in the desktop app.
-          </p>
-        )}
-
-        <div className="mt-5 space-y-4">
-          <KeyField
-            label="Groq API key"
-            configured={session.groqConfigured}
-            value={groqKey}
-            onChange={setGroqKey}
-            onBlur={() => void loadGroqModels(groqKey)}
-          />
-          <KeyField
-            label="Cartesia API key"
-            configured={session.cartesiaConfigured}
-            value={cartesiaKey}
-            onChange={setCartesiaKey}
-            onBlur={() => void loadVoiceList(cartesiaKey)}
-          />
-          <ModelSelect
-            label="Conversation model"
-            value={preferences.llmModel}
-            models={chatChoices}
-            loading={modelsLoading}
-            empty="Enter a Groq key to load conversation models."
-            onChange={(llmModel) => setPreferences((current) => ({ ...current, llmModel }))}
-          />
-          <ModelSelect
-            label="Speech model"
-            value={preferences.sttModel}
-            models={speechChoices}
-            loading={modelsLoading}
-            empty="Enter a Groq key to load Whisper models."
-            onChange={(sttModel) => setPreferences((current) => ({ ...current, sttModel }))}
-          />
-          {modelsError && <p className="text-sm text-danger">{modelsError}</p>}
-          <label className="block text-sm">
-            <span className="mb-1 block text-muted">Cartesia voice</span>
-            <select
-              className="w-full rounded-xl border border-line bg-paper px-3 py-2"
-              value={preferences.voiceId}
-              onChange={(event) => setPreferences((current) => ({ ...current, voiceId: event.target.value }))}
+        <div className="mx-6 mt-4 flex gap-1 rounded-2xl bg-paper p-1" role="tablist" aria-label="Settings sections">
+          {TABS.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              role="tab"
+              aria-selected={tab === item.id}
+              className={
+                tab === item.id
+                  ? "flex-1 rounded-xl bg-card-2 px-2 py-1.5 text-sm font-medium text-ink"
+                  : "flex-1 rounded-xl px-2 py-1.5 text-sm text-muted hover:text-ink"
+              }
+              onClick={() => setTab(item.id)}
             >
-              {voiceChoices.map((voice) => (
-                <option key={voice.id} value={voice.id}>
-                  {voice.name}
-                  {voice.language ? ` · ${voice.language}` : ""}
-                </option>
-              ))}
-            </select>
-            {voicesLoading && <span className="mt-1 block text-muted">Loading voices…</span>}
-            {voicesError && <span className="mt-1 block text-danger">{voicesError}</span>}
-          </label>
-          <SliderField
-            label="Speaking speed"
-            min={0.6}
-            max={1.5}
-            step={0.05}
-            value={preferences.voiceSpeed}
-            suffix="×"
-            onChange={(voiceSpeed) => setPreferences((current) => ({ ...current, voiceSpeed }))}
-          />
-          <SliderField
-            label="Speaking volume"
-            min={0}
-            max={100}
-            step={1}
-            digits={0}
-            value={Math.round(preferences.voiceVolume * 100)}
-            suffix="%"
-            onChange={(percent) =>
-              setPreferences((current) => ({ ...current, voiceVolume: Math.min(1, Math.max(0, percent / 100)) }))
-            }
-          />
-          <button
-            type="button"
-            className="rounded-full border border-line px-4 py-2 text-sm disabled:opacity-50"
-            disabled={!desktop || previewing}
-            onClick={() => void onPreview()}
-          >
-            {previewing ? "Playing…" : "Preview voice"}
-          </button>
-          <div className="rounded-2xl border border-line px-4 py-3">
-            <p className="text-sm text-muted">Layout</p>
-            <div className="mt-3">
+              {item.label}
+            </button>
+          ))}
+        </div>
+
+        <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
+          {!desktop && (
+            <p className="mb-4 rounded-xl bg-note px-3 py-2 text-sm text-muted">
+              This window is the browser preview. Saving runs in the desktop app.
+            </p>
+          )}
+
+          {tab === "keys" && (
+            <Section
+              title="API keys and models"
+              intro="Keys stay encrypted in the data folder next to Tolly and are never shown again. A Groq key loads the models it can use."
+            >
+              <KeyField
+                label="Groq API key"
+                configured={session.groqConfigured}
+                value={groqKey}
+                onChange={setGroqKey}
+                onBlur={() => void loadGroqModels(groqKey)}
+              />
+              <KeyField
+                label="Cartesia API key"
+                configured={session.cartesiaConfigured}
+                value={cartesiaKey}
+                onChange={setCartesiaKey}
+                onBlur={() => void loadVoiceList(cartesiaKey)}
+              />
+              <ModelSelect
+                label="Conversation model"
+                value={preferences.llmModel}
+                models={chatChoices}
+                loading={modelsLoading}
+                empty="Enter a Groq key to load conversation models."
+                onChange={(llmModel) => setPreferences((current) => ({ ...current, llmModel }))}
+              />
+              <ModelSelect
+                label="Speech-to-text model"
+                value={preferences.sttModel}
+                models={speechChoices}
+                loading={modelsLoading}
+                empty="Enter a Groq key to load Whisper models."
+                onChange={(sttModel) => setPreferences((current) => ({ ...current, sttModel }))}
+              />
+              {modelsError && <p className="text-sm text-danger">{modelsError}</p>}
+            </Section>
+          )}
+
+          {tab === "voice" && (
+            <Section title="Tolly's voice" intro="Pick the voice Cartesia uses and how it sounds. Preview plays through the speaker chosen in Microphone.">
+              <label className="block text-sm">
+                <span className="mb-1 block text-muted">Voice</span>
+                <select
+                  className="field"
+                  value={preferences.voiceId}
+                  onChange={(event) => setPreferences((current) => ({ ...current, voiceId: event.target.value }))}
+                >
+                  {voiceChoices.map((voice) => (
+                    <option key={voice.id} value={voice.id}>
+                      {voice.name}
+                      {voice.language ? ` · ${voice.language}` : ""}
+                    </option>
+                  ))}
+                </select>
+                {voicesLoading && <span className="mt-1 block text-muted">Loading voices…</span>}
+                {voicesError && <span className="mt-1 block text-danger">{voicesError}</span>}
+              </label>
+              <SliderField
+                label="Speaking speed"
+                min={0.6}
+                max={1.5}
+                step={0.05}
+                value={preferences.voiceSpeed}
+                suffix="×"
+                onChange={(voiceSpeed) => setPreferences((current) => ({ ...current, voiceSpeed }))}
+              />
+              <SliderField
+                label="Volume"
+                min={0}
+                max={100}
+                step={1}
+                digits={0}
+                value={Math.round(preferences.voiceVolume * 100)}
+                suffix="%"
+                onChange={(percent) =>
+                  setPreferences((current) => ({ ...current, voiceVolume: Math.min(1, Math.max(0, percent / 100)) }))
+                }
+              />
+              <button
+                type="button"
+                className="pill rounded-full px-4 py-2 text-sm disabled:opacity-50"
+                disabled={!desktop || previewing}
+                onClick={() => void onPreview()}
+              >
+                {previewing ? "Playing…" : "Preview voice"}
+              </button>
+            </Section>
+          )}
+
+          {tab === "mic" && (
+            <MicrophoneSection
+              preferences={preferences}
+              onChange={(patch) => setPreferences((current) => ({ ...current, ...patch }))}
+            />
+          )}
+
+          {tab === "look" && (
+            <Section title="Look" intro="Changes show behind this window right away. Save keeps them.">
               <SliderField
                 label="Font size"
                 min={11}
@@ -413,99 +479,311 @@ export function SettingsModal({
                   onAppearance({ fontSize: next, layout: preferences.layout });
                 }}
               />
-            </div>
-            <div className="mt-4 grid grid-cols-3 gap-2" role="group" aria-label="Layout">
-              <LayoutChoice
-                active={preferences.layout === "center"}
-                label="Centered"
-                onClick={() => chooseLayout("center")}
-              />
-              <LayoutChoice
-                active={preferences.layout === "wide"}
-                label="Wide"
-                onClick={() => chooseLayout("wide")}
-              />
-              <LayoutChoice
-                active={preferences.layout === "split"}
-                label="Split"
-                onClick={() => chooseLayout("split")}
-              />
-            </div>
-            <p className="mt-2 text-sm leading-6 text-muted">{layoutHint(preferences.layout)}</p>
-          </div>
-          <label className="block text-sm">
-            <span className="mb-1 block text-muted">Daily token budget</span>
-            <input
-              type="number"
-              min={1000}
-              max={2000000}
-              className="w-full rounded-xl border border-line bg-paper px-3 py-2"
-              value={preferences.dailyTokenBudget}
-              onChange={(event) =>
-                setPreferences((current) => ({
-                  ...current,
-                  dailyTokenBudget: Number(event.target.value),
-                }))
-              }
-            />
-          </label>
-          <div className="rounded-2xl border border-line px-4 py-3">
-            <p className="text-sm text-muted">Updates</p>
-            <p className="mt-1 text-sm leading-6">
-              {update
-                ? update.available
-                  ? `Version ${update.latest} is on GitHub. This copy is ${update.current}.`
-                  : `This copy is ${update.current}, the latest release.`
-                : `This copy is ${session.version}. Tolly can download a newer portable build from GitHub.`}
-            </p>
-            {updating && (
-              <p className="mt-1 text-sm text-muted">
-                Downloading
-                {updateTotal > 0 ? ` ${Math.min(100, Math.round((updateReceived / updateTotal) * 100))}%` : "…"}
-              </p>
-            )}
-            {updateError && <p className="mt-1 text-sm text-danger">{updateError}</p>}
-            <div className="mt-3 flex flex-wrap gap-2">
-              <button
-                type="button"
-                className="rounded-full border border-line px-3 py-1.5 text-sm disabled:opacity-50"
-                disabled={!desktop || updating}
-                onClick={onCheckUpdate}
-              >
-                Check for updates
-              </button>
-              {update?.available && (
+              <div>
+                <p className="mb-2 text-sm text-muted">Layout</p>
+                <Segmented
+                  label="Layout"
+                  value={preferences.layout}
+                  options={[
+                    { id: "center", label: "Centered" },
+                    { id: "wide", label: "Wide" },
+                    { id: "split", label: "Split" },
+                  ]}
+                  onChange={(layout) => chooseLayout(layout as AppLayout)}
+                />
+                <p className="mt-2 text-sm leading-6 text-muted">{layoutHint(preferences.layout)}</p>
+              </div>
+            </Section>
+          )}
+
+          {tab === "about" && (
+            <Section title="About" intro={`This copy is Tolly ${session.version}.`}>
+              <label className="block text-sm">
+                <span className="mb-1 flex items-center justify-between text-muted">
+                  Daily token budget
+                  <span>{preferences.dailyTokenBudget.toLocaleString()} tokens</span>
+                </span>
+                <input
+                  type="number"
+                  min={1000}
+                  max={2000000}
+                  step={1000}
+                  className="field"
+                  value={preferences.dailyTokenBudget}
+                  onChange={(event) =>
+                    setPreferences((current) => ({
+                      ...current,
+                      dailyTokenBudget: Number(event.target.value),
+                    }))
+                  }
+                />
+                <span className="mt-1 block text-muted">Tolly stops calling Groq for the day once this is used up.</span>
+              </label>
+              <div className="rounded-2xl border border-line px-4 py-3">
+                <p className="text-sm font-medium">Updates</p>
+                <p className="mt-1 text-sm leading-6 text-muted">
+                  {update
+                    ? update.available
+                      ? `Version ${update.latest} is on GitHub. This copy is ${update.current}.`
+                      : `This copy is ${update.current}, the latest release.`
+                    : "Tolly can download a newer portable build from GitHub and reopen itself."}
+                </p>
+                {updating && (
+                  <p className="mt-1 text-sm text-muted">
+                    Downloading
+                    {updateTotal > 0 ? ` ${Math.min(100, Math.round((updateReceived / updateTotal) * 100))}%` : "…"}
+                  </p>
+                )}
+                {updateError && <p className="mt-1 text-sm text-danger">{updateError}</p>}
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    className="pill rounded-full px-3 py-1.5 text-sm disabled:opacity-50"
+                    disabled={!desktop || updating}
+                    onClick={onCheckUpdate}
+                  >
+                    Check for updates
+                  </button>
+                  {update?.available && (
+                    <button
+                      type="button"
+                      className="btn-primary rounded-full px-3 py-1.5 text-sm"
+                      disabled={!desktop || updating}
+                      onClick={onApplyUpdate}
+                    >
+                      {updating ? "Installing…" : "Update and reopen"}
+                    </button>
+                  )}
+                </div>
+              </div>
+              <div className="rounded-2xl border border-danger/40 px-4 py-3">
+                <p className="text-sm font-medium">Remove API keys</p>
+                <p className="mt-1 text-sm leading-6 text-muted">Deletes both keys from this computer. Tolly cannot talk until new ones are added.</p>
                 <button
                   type="button"
-                  className="btn-primary rounded-full px-3 py-1.5 text-sm"
-                  disabled={!desktop || updating}
-                  onClick={onApplyUpdate}
+                  className="mt-3 rounded-full border border-danger/50 px-3 py-1.5 text-sm text-danger disabled:opacity-50"
+                  disabled={saving || !desktop}
+                  onClick={() => void onClear()}
                 >
-                  {updating ? "Installing…" : "Update and reopen"}
+                  Remove keys
                 </button>
-              )}
-            </div>
-          </div>
+              </div>
+            </Section>
+          )}
         </div>
 
-        {formError && <p className="mt-4 text-sm text-danger">{formError}</p>}
-
-        <div className="mt-6 flex flex-wrap items-center justify-between gap-3">
-          <button type="button" className="text-sm text-danger disabled:opacity-50" disabled={saving || !desktop} onClick={() => void onClear()}>
-            Remove keys
-          </button>
-          <button
-            type="button"
-            className="btn-primary rounded-full px-5 py-2 text-sm font-medium"
-            disabled={saving || !desktop}
-            onClick={() => void onSave()}
-          >
-            {saving ? "Saving…" : "Save"}
-          </button>
+        <div className="border-t border-line px-6 py-4">
+          {formError && <p className="mb-3 text-sm text-danger">{formError}</p>}
+          <div className="flex items-center justify-end gap-2">
+            <button type="button" className="rounded-full px-4 py-2 text-sm text-muted hover:text-ink" onClick={onClose}>
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="btn-primary rounded-full px-5 py-2 text-sm font-medium"
+              disabled={saving || !desktop}
+              onClick={() => void onSave()}
+            >
+              {saving ? "Saving…" : "Save"}
+            </button>
+          </div>
         </div>
       </div>
     </div>
   );
+}
+
+function MicrophoneSection({
+  preferences,
+  onChange,
+}: {
+  preferences: Preferences;
+  onChange: (patch: Partial<Preferences>) => void;
+}) {
+  const [devices, setDevices] = useState<AudioDevices>({ inputs: [], outputs: [], named: false });
+  const [deviceError, setDeviceError] = useState<string | null>(null);
+  const [testing, setTesting] = useState(false);
+  const [reading, setReading] = useState<MicLevel>({ level: 0, voiced: false, capturing: false });
+  const [heard, setHeard] = useState(0);
+  const capture = useRef<SpeechCapture | null>(null);
+  const outputs = supportsOutputSelection();
+
+  async function refresh(requestNames: boolean) {
+    setDeviceError(null);
+    try {
+      setDevices(await listAudioDevices(requestNames));
+    } catch (error: unknown) {
+      setDeviceError(error instanceof Error ? error.message : "The device list could not be read.");
+    }
+  }
+
+  useEffect(() => {
+    void refresh(false);
+    const media = navigator.mediaDevices;
+    if (!media?.addEventListener) {
+      return;
+    }
+    const onChangeDevices = () => void refresh(false);
+    media.addEventListener("devicechange", onChangeDevices);
+    return () => media.removeEventListener("devicechange", onChangeDevices);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      void capture.current?.stop();
+      capture.current = null;
+    };
+  }, []);
+
+  // Restart the test when the microphone or sensitivity changes, so what you hear is what you saved.
+  useEffect(() => {
+    if (!testing) {
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      await capture.current?.stop();
+      capture.current = null;
+      if (cancelled) {
+        return;
+      }
+      const next = new SpeechCapture(
+        () => setHeard((count) => count + 1),
+        () => undefined,
+        (level) => setReading(level),
+        { deviceId: preferences.inputDeviceId, sensitivity: preferences.micSensitivity },
+      );
+      try {
+        await next.start();
+        if (cancelled) {
+          await next.stop();
+          return;
+        }
+        capture.current = next;
+        void refresh(false);
+      } catch (error: unknown) {
+        const name = error instanceof DOMException ? error.name : "";
+        setDeviceError(name === "NotAllowedError" ? "Microphone permission was blocked." : "That microphone could not be opened.");
+        setTesting(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [testing, preferences.inputDeviceId, preferences.micSensitivity]);
+
+  async function toggleTest() {
+    if (testing) {
+      setTesting(false);
+      await capture.current?.stop();
+      capture.current = null;
+      setReading({ level: 0, voiced: false, capturing: false });
+      return;
+    }
+    setHeard(0);
+    setTesting(true);
+  }
+
+  const inputMissing = preferences.inputDeviceId !== "" && !devices.inputs.some((device) => device.id === preferences.inputDeviceId);
+  const outputMissing = preferences.outputDeviceId !== "" && !devices.outputs.some((device) => device.id === preferences.outputDeviceId);
+
+  return (
+    <Section
+      title="Microphone and speaker"
+      intro="Choose which devices Tolly uses and how easily it notices your voice. Tap the microphone button once in the main window, and Tolly listens on its own; hold it if you prefer to control each sentence."
+    >
+      <label className="block text-sm">
+        <span className="mb-1 flex items-center justify-between text-muted">
+          Microphone
+          <button type="button" className="text-xs text-accent-dark hover:underline" onClick={() => void refresh(true)}>
+            {devices.named ? "Refresh list" : "Show device names"}
+          </button>
+        </span>
+        <select
+          className="field"
+          value={inputMissing ? "" : preferences.inputDeviceId}
+          onChange={(event) => onChange({ inputDeviceId: event.target.value })}
+        >
+          <option value="">System default microphone</option>
+          {devices.inputs.map((device) => (
+            <option key={device.id} value={device.id}>
+              {device.label}
+            </option>
+          ))}
+        </select>
+        {inputMissing && <span className="mt-1 block text-muted">The saved microphone is not connected. The system default is used until it returns.</span>}
+      </label>
+
+      {outputs && (
+        <label className="block text-sm">
+          <span className="mb-1 block text-muted">Speaker</span>
+          <select
+            className="field"
+            value={outputMissing ? "" : preferences.outputDeviceId}
+            onChange={(event) => onChange({ outputDeviceId: event.target.value })}
+          >
+            <option value="">System default speaker</option>
+            {devices.outputs.map((device) => (
+              <option key={device.id} value={device.id}>
+                {device.label}
+              </option>
+            ))}
+          </select>
+          {outputMissing && <span className="mt-1 block text-muted">The saved speaker is not connected. The system default is used until it returns.</span>}
+        </label>
+      )}
+
+      <div>
+        <p className="mb-2 text-sm text-muted">Sensitivity</p>
+        <Segmented
+          label="Microphone sensitivity"
+          value={preferences.micSensitivity}
+          options={[
+            { id: "low", label: "Low" },
+            { id: "normal", label: "Normal" },
+            { id: "high", label: "High" },
+          ]}
+          onChange={(micSensitivity) => onChange({ micSensitivity: micSensitivity as MicSensitivity })}
+        />
+        <p className="mt-2 text-sm leading-6 text-muted">{sensitivityHint(preferences.micSensitivity)}</p>
+      </div>
+
+      <div className="rounded-2xl border border-line px-4 py-3">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <p className="text-sm font-medium">Test the microphone</p>
+            <p className="text-sm text-muted">Say a sentence and watch the bar turn purple. Pause, and Tolly counts it as heard.</p>
+          </div>
+          <button
+            type="button"
+            className={`${testing ? "btn-primary" : "pill"} shrink-0 rounded-full px-3 py-1.5 text-sm`}
+            onClick={() => void toggleTest()}
+          >
+            {testing ? "Stop" : "Start"}
+          </button>
+        </div>
+        <div className="mt-3">
+          <VoiceBar reading={reading} open={testing} />
+        </div>
+        {testing && (
+          <p className="mt-2 text-center text-sm text-muted" aria-live="polite">
+            {heard === 0 ? "Nothing heard yet." : heard === 1 ? "Heard 1 sentence." : `Heard ${heard} sentences.`}
+          </p>
+        )}
+      </div>
+      {deviceError && <p className="text-sm text-danger">{deviceError}</p>}
+    </Section>
+  );
+}
+
+function sensitivityHint(value: MicSensitivity): string {
+  if (value === "low") {
+    return "For noisy rooms or a microphone that picks up everything. You need to speak a little more clearly.";
+  }
+  if (value === "high") {
+    return "For quiet voices or a microphone that is far away. Room noise is more likely to start a turn.";
+  }
+  return "A good fit for most laptops and headsets.";
 }
 
 function layoutHint(layout: AppLayout): string {
@@ -518,20 +796,47 @@ function layoutHint(layout: AppLayout): string {
   return "Everything stays in a column in the middle.";
 }
 
-function LayoutChoice({ active, label, onClick }: { active: boolean; label: string; onClick: () => void }) {
+function Section({ title, intro, children }: { title: string; intro: string; children: ReactNode }) {
   return (
-    <button
-      type="button"
-      aria-pressed={active}
-      className={
-        active
-          ? "btn-primary rounded-xl px-2 py-2 text-sm"
-          : "rounded-xl border border-line px-2 py-2 text-sm text-muted hover:text-ink"
-      }
-      onClick={onClick}
-    >
-      {label}
-    </button>
+    <section className="space-y-4">
+      <div>
+        <h3 className="text-base font-semibold">{title}</h3>
+        <p className="mt-1 text-sm leading-6 text-muted">{intro}</p>
+      </div>
+      {children}
+    </section>
+  );
+}
+
+function Segmented({
+  label,
+  value,
+  options,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  options: { id: string; label: string }[];
+  onChange: (id: string) => void;
+}) {
+  return (
+    <div className="grid gap-2" style={{ gridTemplateColumns: `repeat(${options.length}, minmax(0, 1fr))` }} role="group" aria-label={label}>
+      {options.map((option) => (
+        <button
+          key={option.id}
+          type="button"
+          aria-pressed={value === option.id}
+          className={
+            value === option.id
+              ? "btn-primary rounded-xl px-2 py-2 text-sm"
+              : "rounded-xl border border-line px-2 py-2 text-sm text-muted hover:text-ink"
+          }
+          onClick={() => onChange(option.id)}
+        >
+          {option.label}
+        </button>
+      ))}
+    </div>
   );
 }
 
@@ -559,7 +864,7 @@ function SliderField({
     <label className="block text-sm">
       <span className="mb-1 flex items-center justify-between text-muted">
         {label}
-        <span>
+        <span className="text-ink">
           {shown.toFixed(digits)}
           {suffix}
         </span>
@@ -603,13 +908,9 @@ function ModelSelect({
     <label className="block text-sm">
       <span className="mb-1 block text-muted">{label}</span>
       {models.length === 0 ? (
-        <p className="rounded-xl border border-line bg-paper px-3 py-2 text-muted">{loading ? "Checking Groq…" : empty}</p>
+        <p className="field text-muted">{loading ? "Checking Groq…" : empty}</p>
       ) : (
-        <select
-          className="w-full rounded-xl border border-line bg-paper px-3 py-2"
-          value={value}
-          onChange={(event) => onChange(event.target.value)}
-        >
+        <select className="field" value={value} onChange={(event) => onChange(event.target.value)}>
           {models.map((model) => (
             <option key={model.id} value={model.id}>
               {modelLabel(model)}
@@ -640,13 +941,13 @@ function KeyField({
     <label className="block text-sm" htmlFor={id}>
       <span className="mb-1 flex items-center justify-between text-muted">
         {label}
-        <span>{configured ? "Saved" : "Not set"}</span>
+        <span className={configured ? "text-success" : ""}>{configured ? "Saved" : "Not set"}</span>
       </span>
       <input
         id={id}
         type="password"
         autoComplete="off"
-        className="w-full rounded-xl border border-line bg-paper px-3 py-2"
+        className="field"
         placeholder={configured ? "Enter a new key to replace the saved one" : "Paste your key"}
         value={value}
         onChange={(event) => onChange(event.target.value)}

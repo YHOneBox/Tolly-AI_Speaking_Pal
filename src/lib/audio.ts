@@ -1,23 +1,21 @@
 const TARGET_RATE = 16_000;
-const SPEECH_START_RMS = 0.016;
-const BARGE_START_RMS = 0.05;
-const SPEECH_CONTINUE_RMS = 0.008;
-const SILENCE_MS = 750;
+const SPEECH_START_RMS = 0.012;
+const BARGE_START_RMS = 0.03;
+const SPEECH_CONTINUE_RMS = 0.006;
+const SILENCE_MS = 800;
 const MIN_SPEECH_MS = 280;
-const MIN_VOICED_MS = 140;
-const SPEECH_VOICE_MS = 160;
-const BARGE_VOICE_MS = 320;
+const MIN_VOICED_MS = 100;
 const MAX_UTTERANCE_MS = 15_000;
-const PREROLL_MS = 280;
+const PREROLL_MS = 320;
 const CHECK_MS = 24;
 const WINDOW_MS = 32;
-const VOICE_SCORE = 0.3;
-const BARGE_VOICE_SCORE = 0.42;
-const FLOOR_MIN = 0.002;
-const FLOOR_MAX = 0.04;
+const FLOOR_MIN = 0.0015;
+const FLOOR_MAX = 0.02;
 const LEVEL_EVERY_MS = 50;
 
 type SpeechHandler = (wav: Uint8Array) => void;
+
+export type MicSensitivity = "low" | "normal" | "high";
 
 export type MicLevel = {
   /** 0 to 1, how far above the room noise the microphone currently is. */
@@ -30,135 +28,262 @@ export type MicLevel = {
 
 export type LevelHandler = (level: MicLevel) => void;
 
+export type AudioDevice = {
+  id: string;
+  label: string;
+};
+
+export type AudioDevices = {
+  inputs: AudioDevice[];
+  outputs: AudioDevice[];
+  /** False until the browser has granted microphone access once, so names are hidden. */
+  named: boolean;
+};
+
+export type SpeechCaptureOptions = {
+  deviceId?: string;
+  sensitivity?: MicSensitivity;
+};
+
+type Tuning = {
+  /** Multiplier on every loudness threshold. Below 1 hears quieter voices. */
+  loudness: number;
+  /** How voice-like a sound must be before it counts, 0 to 1. */
+  voiceScore: number;
+  bargeScore: number;
+  /** Voiced evidence needed before an utterance starts. */
+  startMs: number;
+  bargeMs: number;
+};
+
+const TUNINGS: Record<MicSensitivity, Tuning> = {
+  low: { loudness: 1.6, voiceScore: 0.46, bargeScore: 0.52, startMs: 180, bargeMs: 280 },
+  normal: { loudness: 1, voiceScore: 0.38, bargeScore: 0.45, startMs: 120, bargeMs: 200 },
+  high: { loudness: 0.6, voiceScore: 0.3, bargeScore: 0.4, startMs: 90, bargeMs: 160 },
+};
+
+export function normalizeSensitivity(value: string | undefined): MicSensitivity {
+  return value === "low" || value === "high" ? value : "normal";
+}
+
 /**
  * Tracks the quiet level of the room so a fan or a hum does not count as a voice.
- * The floor drops quickly and rises slowly, so it follows the room rather than the speaker.
+ * It is updated once per check, drops quickly, rises slowly, and never follows a voice.
  */
 class NoiseFloor {
-  private value = 0.01;
+  private value = 0.006;
   private warm = 0;
 
   get floor(): number {
     return this.value;
   }
 
-  observe(rms: number, speaking: boolean): void {
+  observe(rms: number, speaking: boolean, voiced: boolean): void {
     if (!Number.isFinite(rms)) {
       return;
     }
-    if (this.warm < 20) {
+    if (this.warm < 8) {
+      // The first few checks seed the floor from whatever the room sounds like.
       this.warm += 1;
-      this.value = this.warm === 1 ? rms : this.value * 0.8 + rms * 0.2;
+      this.value = this.warm === 1 ? rms : this.value * 0.7 + rms * 0.3;
     } else if (rms < this.value) {
-      this.value = this.value * 0.9 + rms * 0.1;
-    } else if (!speaking && rms < this.value * 2.5) {
-      this.value = this.value * 0.985 + rms * 0.015;
-    } else if (!speaking) {
-      this.value *= 1.002;
+      this.value = this.value * 0.85 + rms * 0.15;
+    } else if (speaking || voiced) {
+      // A voice is not room noise. Leave the floor alone.
+    } else if (rms < this.value * 2.5) {
+      this.value = this.value * 0.97 + rms * 0.03;
+    } else {
+      // Loud but not a voice: a door, typing, a fan speeding up. Creep up slowly.
+      this.value *= 1.004;
     }
     this.value = Math.min(FLOOR_MAX, Math.max(FLOOR_MIN, this.value));
   }
 
-  startThreshold(): number {
-    return Math.max(SPEECH_START_RMS, this.value * 3.2);
+  // The pitch test does most of the filtering, so these energy gates only need to sit above the room.
+  startThreshold(loudness: number): number {
+    return Math.max(SPEECH_START_RMS, this.value * 2.2) * loudness;
   }
 
-  bargeThreshold(): number {
-    return Math.max(BARGE_START_RMS, this.value * 5);
+  bargeThreshold(loudness: number): number {
+    return Math.max(BARGE_START_RMS, this.value * 4) * loudness;
   }
 
-  continueThreshold(): number {
-    return Math.max(SPEECH_CONTINUE_RMS, this.value * 1.8);
+  // Sensitivity may lower the fixed part, but never the part that sits above the room,
+  // or a fan would keep a sentence "going" forever.
+  continueThreshold(loudness: number): number {
+    return Math.max(SPEECH_CONTINUE_RMS * Math.min(1, loudness), this.value * 1.4);
   }
 }
 
-async function openMicrophone(): Promise<MediaStream> {
+function baseConstraints(deviceId: string | undefined): MediaTrackConstraints {
   const audio: MediaTrackConstraints = {
     channelCount: 1,
     echoCancellation: true,
     noiseSuppression: true,
     autoGainControl: true,
   };
-  try {
-    return await navigator.mediaDevices.getUserMedia({
-      audio: { ...audio, voiceIsolation: true } as MediaTrackConstraints,
-      video: false,
-    });
-  } catch {
-    return navigator.mediaDevices.getUserMedia({ audio, video: false });
+  if (deviceId) {
+    audio.deviceId = { exact: deviceId };
   }
+  return audio;
 }
 
-function isSpeech(samples: Float32Array, sampleRate: number, minRms: number, minScore: number): boolean {
+async function openMicrophone(deviceId: string | undefined): Promise<MediaStream> {
+  const attempts: MediaTrackConstraints[] = [
+    { ...baseConstraints(deviceId), voiceIsolation: true } as MediaTrackConstraints,
+    baseConstraints(deviceId),
+  ];
+  if (deviceId) {
+    // The chosen microphone may be unplugged. Fall back to the system default.
+    attempts.push(baseConstraints(undefined));
+  }
+  let failure: unknown = null;
+  for (const audio of attempts) {
+    try {
+      return await navigator.mediaDevices.getUserMedia({ audio, video: false });
+    } catch (error: unknown) {
+      failure = error;
+      if (error instanceof DOMException && error.name === "NotAllowedError") {
+        throw error;
+      }
+    }
+  }
+  throw failure instanceof Error ? failure : new Error("The microphone could not be opened.");
+}
+
+export function supportsOutputSelection(): boolean {
+  return typeof AudioContext !== "undefined" && "setSinkId" in AudioContext.prototype;
+}
+
+/**
+ * Lists microphones and speakers. Names appear only after the browser has granted microphone access,
+ * so `requestNames` opens the default microphone for a moment when needed.
+ */
+export async function listAudioDevices(requestNames = false): Promise<AudioDevices> {
+  if (!navigator.mediaDevices?.enumerateDevices) {
+    return { inputs: [], outputs: [], named: false };
+  }
+  let devices = await navigator.mediaDevices.enumerateDevices();
+  let named = devices.some((device) => device.kind === "audioinput" && device.label.length > 0);
+  if (!named && requestNames) {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      stream.getTracks().forEach((track) => track.stop());
+      devices = await navigator.mediaDevices.enumerateDevices();
+      named = devices.some((device) => device.kind === "audioinput" && device.label.length > 0);
+    } catch {
+      // Permission was refused. The list stays unnamed.
+    }
+  }
+  const describe = (device: MediaDeviceInfo, kind: string, index: number): AudioDevice => ({
+    id: device.deviceId,
+    label: device.label || `${kind} ${index + 1}`,
+  });
+  const inputs = devices
+    .filter((device) => device.kind === "audioinput" && device.deviceId && device.deviceId !== "default" && device.deviceId !== "communications")
+    .map((device, index) => describe(device, "Microphone", index));
+  const outputs = supportsOutputSelection()
+    ? devices
+        .filter((device) => device.kind === "audiooutput" && device.deviceId && device.deviceId !== "default" && device.deviceId !== "communications")
+        .map((device, index) => describe(device, "Speaker", index))
+    : [];
+  return { inputs, outputs, named };
+}
+
+type Shape = {
+  rms: number;
+  /** 0 to 1, how strongly the window repeats at a speaking pitch. */
+  voice: number;
+};
+
+function describeWindow(samples: Float32Array, sampleRate: number): Shape {
   const length = samples.length;
   if (length < sampleRate * 0.02) {
-    return false;
+    return { rms: 0, voice: 0 };
   }
   let sum = 0;
   let energy = 0;
+  let motion = 0;
   let crossings = 0;
   let previous = samples[0] ?? 0;
   for (let index = 0; index < length; index += 1) {
     const sample = samples[index] ?? 0;
     sum += sample;
     energy += sample * sample;
-    if (index > 0 && (sample >= 0) !== (previous >= 0)) {
-      crossings += 1;
+    if (index > 0) {
+      const step = sample - previous;
+      motion += step * step;
+      if ((sample >= 0) !== (previous >= 0)) {
+        crossings += 1;
+      }
     }
     previous = sample;
   }
-  if (Math.sqrt(energy / length) < minRms) {
-    return false;
+  const rms = Math.sqrt(energy / length);
+  if (energy < 1e-9) {
+    return { rms, voice: 0 };
   }
   const zeroCrossingRate = crossings / Math.max(1, length - 1);
   // Hiss and clicks cross zero very often. A hum barely crosses at all.
-  if (zeroCrossingRate > 0.2 || zeroCrossingRate < 0.004) {
-    return false;
+  if (zeroCrossingRate > 0.22 || zeroCrossingRate < 0.004) {
+    return { rms, voice: 0 };
   }
-  return pitchScore(samples, length, sampleRate, sum / length) >= minScore;
+  // Speech carries most of its energy in the harmonics above 300 Hz. Mains hum, a fridge, and
+  // traffic rumble sit below that, so the signal barely moves from one sample to the next.
+  const tilt = motion / energy;
+  const lowest = Math.pow((2 * Math.PI * 300) / sampleRate, 2);
+  if (tilt < lowest) {
+    return { rms, voice: 0 };
+  }
+  return { rms, voice: pitchScore(samples, length, sampleRate, sum / length) };
 }
 
+/**
+ * Normalized autocorrelation at speaking pitches, 80 to 400 Hz.
+ * Voiced speech repeats strongly at its pitch period and scores well above 0.5.
+ * Breath, hiss, and keyboard clicks score near zero.
+ */
 function pitchScore(samples: Float32Array, length: number, sampleRate: number, mean: number): number {
   const minLag = Math.max(2, Math.floor(sampleRate / 400));
   const maxLag = Math.min(length - 2, Math.floor(sampleRate / 80));
   if (maxLag <= minLag) {
     return 0;
   }
-  let energy = 0;
+  const centered = new Float32Array(length);
+  const prefix = new Float64Array(length + 1);
   for (let index = 0; index < length; index += 1) {
     const sample = (samples[index] ?? 0) - mean;
-    energy += sample * sample;
+    centered[index] = sample;
+    prefix[index + 1] = (prefix[index] ?? 0) + sample * sample;
   }
-  if (energy < 1e-8) {
+  const total = prefix[length] ?? 0;
+  if (total < 1e-8) {
     return 0;
   }
   let best = 0;
-  let total = 0;
-  let count = 0;
   for (let lag = minLag; lag <= maxLag; lag += 2) {
-    let correlation = 0;
     const limit = length - lag;
+    let correlation = 0;
     for (let index = 0; index < limit; index += 2) {
-      correlation += ((samples[index] ?? 0) - mean) * ((samples[index + lag] ?? 0) - mean);
+      correlation += (centered[index] ?? 0) * (centered[index + lag] ?? 0);
     }
-    correlation *= 2;
-    total += correlation;
-    count += 1;
-    if (correlation > best) {
-      best = correlation;
+    if (correlation <= 0) {
+      continue;
+    }
+    // Compare like with like: the energy of the two overlapping stretches, sampled the same way.
+    const head = (prefix[limit] ?? 0) / 2;
+    const tail = (total - (prefix[lag] ?? 0)) / 2;
+    const normalized = correlation / Math.max(1e-9, Math.sqrt(head * tail));
+    if (normalized > best) {
+      best = normalized;
     }
   }
-  if (count === 0 || best <= 0) {
-    return 0;
-  }
-  const average = total / count;
-  if (best < average * 1.6) {
-    return 0;
-  }
-  return best / energy;
+  return Math.min(1, best);
 }
 
 export class SpeechCapture {
+  readonly deviceId: string;
+  private tuning: Tuning;
   private context: AudioContext | null = null;
   private stream: MediaStream | null = null;
   private source: MediaStreamAudioSourceNode | null = null;
@@ -175,7 +300,7 @@ export class SpeechCapture {
   private recent: Float32Array[] = [];
   private recentSamples = 0;
   private sinceCheckMs = 0;
-  private voicedRunMs = 0;
+  private evidenceMs = 0;
   private voicedMs = 0;
   private sinceLevelMs = 0;
   private lastVoiced = false;
@@ -188,14 +313,21 @@ export class SpeechCapture {
     onUtterance: SpeechHandler,
     onSpeechStart: () => void = () => undefined,
     onLevel: LevelHandler = () => undefined,
+    options: SpeechCaptureOptions = {},
   ) {
     this.onUtterance = onUtterance;
     this.onSpeechStart = onSpeechStart;
     this.onLevel = onLevel;
+    this.deviceId = options.deviceId ?? "";
+    this.tuning = TUNINGS[normalizeSensitivity(options.sensitivity)];
+  }
+
+  setSensitivity(sensitivity: MicSensitivity): void {
+    this.tuning = TUNINGS[normalizeSensitivity(sensitivity)];
   }
 
   async start(): Promise<void> {
-    this.stream = await openMicrophone();
+    this.stream = await openMicrophone(this.deviceId || undefined);
     this.context = new AudioContext();
     await this.context.audioWorklet.addModule("/vad-worklet.js");
     this.source = this.context.createMediaStreamSource(this.stream);
@@ -268,7 +400,7 @@ export class SpeechCapture {
     }
     this.sinceLevelMs = 0;
     const floor = this.noise.floor;
-    const span = Math.max(0.03, this.noise.startThreshold() * 3);
+    const span = Math.max(0.03, this.noise.startThreshold(this.tuning.loudness) * 3);
     const level = Math.min(1, Math.max(0, (rms - floor) / span));
     this.onLevel({
       level: Math.sqrt(level),
@@ -283,7 +415,7 @@ export class SpeechCapture {
     this.silenceMs = 0;
     this.speechMs = 0;
     this.prerollMs = 0;
-    this.voicedRunMs = 0;
+    this.evidenceMs = 0;
     this.voicedMs = 0;
     this.sinceCheckMs = 0;
     this.preroll = [];
@@ -322,17 +454,18 @@ export class SpeechCapture {
       return;
     }
 
+    const { loudness } = this.tuning;
+
     if (this.holding) {
       this.utterance.push(samples);
       this.speechMs += frameMs;
-      this.report(rms, frameMs, rms >= this.noise.continueThreshold());
+      this.report(rms, frameMs, rms >= this.noise.continueThreshold(loudness));
       if (this.speechMs >= MAX_UTTERANCE_MS) {
         this.endHold();
       }
       return;
     }
 
-    this.noise.observe(rms, this.speaking);
     this.remember(samples);
     this.sinceCheckMs += frameMs;
     const ready = this.sinceCheckMs >= CHECK_MS && this.recentSamples >= sampleRate * 0.02;
@@ -341,13 +474,17 @@ export class SpeechCapture {
     if (ready) {
       checkedMs = this.sinceCheckMs;
       this.sinceCheckMs = 0;
+      const shape = describeWindow(this.copyWindow(), sampleRate);
       const minRms = this.bargeIn
-        ? this.noise.bargeThreshold()
+        ? this.noise.bargeThreshold(loudness)
         : this.speaking
-          ? this.noise.continueThreshold()
-          : this.noise.startThreshold();
-      const minScore = this.bargeIn ? BARGE_VOICE_SCORE : VOICE_SCORE;
-      heardVoice = isSpeech(this.copyWindow(), sampleRate, minRms, minScore);
+          ? this.noise.continueThreshold(loudness)
+          : this.noise.startThreshold(loudness);
+      const minScore = this.bargeIn ? this.tuning.bargeScore : this.tuning.voiceScore;
+      // A loud sound right at the microphone counts even when its pitch is smeared.
+      const clearlyLoud = !this.bargeIn && shape.rms >= minRms * 2.5 && shape.voice >= minScore * 0.6;
+      heardVoice = shape.rms >= minRms && (shape.voice >= minScore || clearlyLoud);
+      this.noise.observe(shape.rms, this.speaking, heardVoice);
     }
     this.report(rms, frameMs, heardVoice);
 
@@ -363,13 +500,15 @@ export class SpeechCapture {
       if (!ready) {
         return;
       }
+      // Evidence builds while a voice is heard and fades during the short gaps inside words,
+      // so a consonant or a breath does not throw away what was already heard.
       if (heardVoice) {
-        this.voicedRunMs += checkedMs;
+        this.evidenceMs += checkedMs;
       } else {
-        this.voicedRunMs = 0;
+        this.evidenceMs = Math.max(0, this.evidenceMs - checkedMs * 0.6);
       }
-      const need = this.bargeIn ? BARGE_VOICE_MS : SPEECH_VOICE_MS;
-      if (this.voicedRunMs < need) {
+      const need = this.bargeIn ? this.tuning.bargeMs : this.tuning.startMs;
+      if (this.evidenceMs < need) {
         return;
       }
       if (this.bargeIn) {
@@ -379,7 +518,8 @@ export class SpeechCapture {
       this.speaking = true;
       this.utterance = this.preroll.splice(0);
       this.speechMs = this.prerollMs;
-      this.voicedMs = this.voicedRunMs;
+      this.voicedMs = this.evidenceMs;
+      this.evidenceMs = 0;
       this.preroll = [];
       this.prerollMs = 0;
       this.silenceMs = 0;
@@ -391,7 +531,7 @@ export class SpeechCapture {
     if (heardVoice) {
       this.voicedMs += checkedMs;
     }
-    if (rms >= this.noise.continueThreshold()) {
+    if (rms >= this.noise.continueThreshold(loudness)) {
       this.silenceMs = 0;
     } else {
       this.silenceMs += frameMs;
@@ -413,20 +553,44 @@ export class SpeechCapture {
   }
 }
 
+type SinkContext = AudioContext & { setSinkId?: (id: string) => Promise<void> };
+
 export class PcmPlayer {
   private context: AudioContext | null = null;
   private nextTime = 0;
   private nodes: AudioBufferSourceNode[] = [];
   private gain = 1;
+  private sink = "";
 
   setVolume(level: number): void {
     const clamped = Number.isFinite(level) ? Math.min(1, Math.max(0, level)) : 1;
     this.gain = clamped * clamped;
   }
 
+  /** Routes playback to a speaker by device id. An empty id means the system default. */
+  setOutput(deviceId: string): void {
+    const next = deviceId ?? "";
+    if (next === this.sink && this.context) {
+      return;
+    }
+    this.sink = next;
+    this.applySink();
+  }
+
+  private applySink(): void {
+    const context = this.context as SinkContext | null;
+    if (!context || typeof context.setSinkId !== "function") {
+      return;
+    }
+    context.setSinkId(this.sink).catch(() => {
+      // The speaker may be gone. Playback stays on the system default.
+    });
+  }
+
   resume(): void {
     if (!this.context || this.context.state === "closed") {
       this.context = new AudioContext();
+      this.applySink();
     }
     void this.context.resume();
   }
@@ -444,8 +608,11 @@ export class PcmPlayer {
   }
 
   enqueue(pcm: Uint8Array, sampleRate: number): void {
-    const context = this.context ?? new AudioContext();
-    this.context = context;
+    if (!this.context) {
+      this.context = new AudioContext();
+      this.applySink();
+    }
+    const context = this.context;
     const usable = pcm.byteLength - (pcm.byteLength % 2);
     if (usable < 2) {
       return;

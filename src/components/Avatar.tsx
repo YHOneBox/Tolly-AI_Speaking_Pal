@@ -28,38 +28,3 @@ export function Face({ phase, small = false }: FaceProps) {
     </div>
   );
 }
-
-type WaveProps = {
-  phase: Phase;
-  level: number;
-};
-
-export function Wave({ phase, level }: WaveProps) {
-  const speaking = phase === "speaking";
-  const shape = [0.45, 0.8, 1, 0.7, 0.5];
-  return (
-    <div className={`wave${speaking ? " is-speaking" : ""}`} aria-hidden="true">
-      {shape.map((weight, index) => (
-        <span
-          key={index}
-          style={speaking ? undefined : { height: `${Math.max(18, Math.round(level * weight * 100))}%` }}
-        />
-      ))}
-    </div>
-  );
-}
-
-type PresenceProps = {
-  phase: Phase;
-  level: number;
-};
-
-export function Presence({ phase, level }: PresenceProps) {
-  return (
-    <div className="flex items-center justify-center gap-4">
-      <Wave phase={phase} level={level} />
-      <Face phase={phase} />
-      <Wave phase={phase} level={level} />
-    </div>
-  );
-}

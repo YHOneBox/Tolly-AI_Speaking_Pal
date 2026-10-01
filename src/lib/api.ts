@@ -51,6 +51,9 @@ export async function saveSettings(input: {
       voiceVolume: input.preferences.voiceVolume,
       fontSize: input.preferences.fontSize,
       layout: input.preferences.layout,
+      inputDeviceId: input.preferences.inputDeviceId ?? "",
+      outputDeviceId: input.preferences.outputDeviceId ?? "",
+      micSensitivity: input.preferences.micSensitivity ?? "normal",
     },
   });
 }

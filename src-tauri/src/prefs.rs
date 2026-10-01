@@ -34,10 +34,36 @@ pub struct Preferences {
     pub font_size: u8,
     #[serde(default = "default_layout")]
     pub layout: String,
+    /// Browser device id of the microphone. Empty means the system default.
+    #[serde(default)]
+    pub input_device_id: String,
+    /// Browser device id of the speaker. Empty means the system default.
+    #[serde(default)]
+    pub output_device_id: String,
+    #[serde(default = "default_mic_sensitivity")]
+    pub mic_sensitivity: String,
 }
 
 fn default_capture_mode() -> String {
     "vad".to_string()
+}
+
+pub fn default_mic_sensitivity() -> String {
+    "normal".to_string()
+}
+
+pub fn normalize_sensitivity(value: &str) -> String {
+    if value == "low" || value == "high" {
+        value.to_string()
+    } else {
+        "normal".to_string()
+    }
+}
+
+/// Device ids come from the webview and are only ever handed back to it.
+/// They are opaque tokens, so the check is just a sane length and printable ASCII.
+pub fn device_id_ok(value: &str) -> bool {
+    value.len() <= 256 && value.chars().all(|ch| ch.is_ascii_graphic())
 }
 
 fn default_voice_speed() -> f64 {
@@ -98,6 +124,9 @@ impl Default for Preferences {
             voice_volume: default_voice_volume(),
             font_size: default_font_size(),
             layout: default_layout(),
+            input_device_id: String::new(),
+            output_device_id: String::new(),
+            mic_sensitivity: default_mic_sensitivity(),
         }
     }
 }
@@ -185,6 +214,12 @@ pub fn validate(prefs: &Preferences) -> Result<(), ApiError> {
     if prefs.layout != "center" && prefs.layout != "wide" && prefs.layout != "split" {
         return Err(ApiError::bad("Choose a centered, wide, or split layout."));
     }
+    if !device_id_ok(&prefs.input_device_id) || !device_id_ok(&prefs.output_device_id) {
+        return Err(ApiError::bad("Choose a microphone and speaker from the list."));
+    }
+    if prefs.mic_sensitivity != normalize_sensitivity(&prefs.mic_sensitivity) {
+        return Err(ApiError::bad("Microphone sensitivity must be low, normal, or high."));
+    }
     Ok(())
 }
 
@@ -235,6 +270,13 @@ pub fn load<R: Runtime>(app: &AppHandle<R>) -> Result<Preferences, ApiError> {
     prefs.voice_volume = clamp_voice_volume(prefs.voice_volume);
     prefs.font_size = clamp_font_size(prefs.font_size);
     prefs.layout = normalize_layout(&prefs.layout);
+    if !device_id_ok(&prefs.input_device_id) {
+        prefs.input_device_id.clear();
+    }
+    if !device_id_ok(&prefs.output_device_id) {
+        prefs.output_device_id.clear();
+    }
+    prefs.mic_sensitivity = normalize_sensitivity(&prefs.mic_sensitivity);
     Ok(prefs)
 }
 

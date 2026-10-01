@@ -4,6 +4,7 @@ export const DEFAULT_STT_MODEL = "whisper-large-v3";
 
 export type CaptureMode = "vad" | "hold";
 export type AppLayout = "center" | "wide" | "split";
+export type MicSensitivity = "low" | "normal" | "high";
 
 export type Preferences = {
   voiceId: string;
@@ -15,6 +16,11 @@ export type Preferences = {
   voiceVolume: number;
   fontSize: number;
   layout: AppLayout;
+  /** Browser device id of the microphone. Empty means the system default. */
+  inputDeviceId: string;
+  /** Browser device id of the speaker. Empty means the system default. */
+  outputDeviceId: string;
+  micSensitivity: MicSensitivity;
 };
 
 export type ListedModel = {
@@ -87,6 +93,9 @@ export const DEFAULT_PREFERENCES: Preferences = {
   voiceVolume: 1,
   fontSize: 16,
   layout: "center",
+  inputDeviceId: "",
+  outputDeviceId: "",
+  micSensitivity: "normal",
 };
 
 export function modelLabel(model: ListedModel): string {
@@ -116,6 +125,10 @@ export function normalizeFontSize(value: number | undefined): number {
     return 16;
   }
   return Math.min(20, Math.max(11, Math.round(value)));
+}
+
+export function normalizeSensitivity(value: string | undefined): MicSensitivity {
+  return value === "low" || value === "high" ? value : "normal";
 }
 
 export function normalizeLayout(value: string | undefined): AppLayout {

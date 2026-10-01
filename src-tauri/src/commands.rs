@@ -35,6 +35,12 @@ pub struct SaveSettings {
     pub voice_volume: f64,
     pub font_size: u8,
     pub layout: String,
+    #[serde(default)]
+    pub input_device_id: String,
+    #[serde(default)]
+    pub output_device_id: String,
+    #[serde(default = "prefs::default_mic_sensitivity")]
+    pub mic_sensitivity: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -91,6 +97,9 @@ pub fn save_settings(app: AppHandle, settings: SaveSettings) -> Result<Bootstrap
         voice_volume: prefs::clamp_voice_volume(settings.voice_volume),
         font_size: prefs::clamp_font_size(settings.font_size),
         layout: prefs::normalize_layout(&settings.layout),
+        input_device_id: settings.input_device_id,
+        output_device_id: settings.output_device_id,
+        mic_sensitivity: prefs::normalize_sensitivity(&settings.mic_sensitivity),
     };
     prefs::save(&app, &preferences)?;
     bootstrap(app)
