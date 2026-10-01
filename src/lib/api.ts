@@ -47,6 +47,10 @@ export async function saveSettings(input: {
       sttModel: input.preferences.sttModel,
       dailyTokenBudget: input.preferences.dailyTokenBudget,
       captureMode: input.preferences.captureMode,
+      voiceSpeed: input.preferences.voiceSpeed,
+      voiceVolume: input.preferences.voiceVolume,
+      fontSize: input.preferences.fontSize,
+      layout: input.preferences.layout,
     },
   });
 }
@@ -102,4 +106,46 @@ export async function cancelSpeech(): Promise<void> {
     return;
   }
   await invoke("cancel_speech");
+}
+
+export async function previewVoice(
+  voiceId: string,
+  voiceSpeed: number,
+  voiceVolume: number,
+  turnId: string,
+  onChunk: (chunk: TtsChunk) => void,
+): Promise<void> {
+  assertDesktop();
+  const unlisten: UnlistenFn = await listen<TtsChunk>("tts-chunk", (event) => {
+    if (event.payload.turnId === turnId) {
+      onChunk(event.payload);
+    }
+  });
+  try {
+    await invoke("preview_voice", { voiceId, voiceSpeed, voiceVolume, turnId });
+  } finally {
+    unlisten();
+  }
+}
+
+export type UpdateOffer = {
+  current: string;
+  latest: string;
+  available: boolean;
+  notes: string;
+};
+
+export type UpdateProgress = {
+  received: number;
+  total: number;
+};
+
+export async function checkUpdate(): Promise<UpdateOffer> {
+  assertDesktop();
+  return invoke<UpdateOffer>("check_update");
+}
+
+export async function applyUpdate(): Promise<void> {
+  assertDesktop();
+  await invoke("apply_update");
 }

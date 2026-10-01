@@ -26,10 +26,60 @@ pub struct Preferences {
     pub daily_token_budget: u64,
     #[serde(default = "default_capture_mode")]
     pub capture_mode: String,
+    #[serde(default = "default_voice_speed")]
+    pub voice_speed: f64,
+    #[serde(default = "default_voice_volume")]
+    pub voice_volume: f64,
+    #[serde(default = "default_font_size")]
+    pub font_size: u8,
+    #[serde(default = "default_layout")]
+    pub layout: String,
 }
 
 fn default_capture_mode() -> String {
     "vad".to_string()
+}
+
+fn default_voice_speed() -> f64 {
+    1.0
+}
+
+fn default_voice_volume() -> f64 {
+    1.0
+}
+
+fn default_font_size() -> u8 {
+    16
+}
+
+fn default_layout() -> String {
+    "center".to_string()
+}
+
+pub fn clamp_font_size(value: u8) -> u8 {
+    value.clamp(14, 22)
+}
+
+pub fn normalize_layout(value: &str) -> String {
+    if value == "wide" || value == "split" {
+        value.to_string()
+    } else {
+        "center".to_string()
+    }
+}
+
+pub fn clamp_voice_speed(value: f64) -> f64 {
+    if !value.is_finite() {
+        return 1.0;
+    }
+    (value.clamp(0.6, 1.5) * 100.0).round() / 100.0
+}
+
+pub fn clamp_voice_volume(value: f64) -> f64 {
+    if !value.is_finite() {
+        return 1.0;
+    }
+    (value.clamp(0.5, 2.0) * 100.0).round() / 100.0
 }
 
 fn default_stt_model() -> String {
@@ -44,6 +94,10 @@ impl Default for Preferences {
             stt_model: default_stt_model(),
             daily_token_budget: 100_000,
             capture_mode: default_capture_mode(),
+            voice_speed: default_voice_speed(),
+            voice_volume: default_voice_volume(),
+            font_size: default_font_size(),
+            layout: default_layout(),
         }
     }
 }
@@ -116,8 +170,20 @@ pub fn validate(prefs: &Preferences) -> Result<(), ApiError> {
     }
     if prefs.capture_mode != "vad" && prefs.capture_mode != "hold" {
         return Err(ApiError::bad(
-            "Choose voice detection or hold to speak.",
+            "The saved talk mode is not recognized.",
         ));
+    }
+    if (prefs.voice_speed - clamp_voice_speed(prefs.voice_speed)).abs() > 0.001 {
+        return Err(ApiError::bad("Speaking speed must be between 0.6 and 1.5."));
+    }
+    if (prefs.voice_volume - clamp_voice_volume(prefs.voice_volume)).abs() > 0.001 {
+        return Err(ApiError::bad("Speaking volume must be between 0.5 and 2."));
+    }
+    if !(14..=22).contains(&prefs.font_size) {
+        return Err(ApiError::bad("Font size must be between 14 and 22."));
+    }
+    if prefs.layout != "center" && prefs.layout != "wide" && prefs.layout != "split" {
+        return Err(ApiError::bad("Choose a centered, wide, or split layout."));
     }
     Ok(())
 }
@@ -165,6 +231,10 @@ pub fn load<R: Runtime>(app: &AppHandle<R>) -> Result<Preferences, ApiError> {
     if prefs.capture_mode != "vad" && prefs.capture_mode != "hold" {
         prefs.capture_mode = default_capture_mode();
     }
+    prefs.voice_speed = clamp_voice_speed(prefs.voice_speed);
+    prefs.voice_volume = clamp_voice_volume(prefs.voice_volume);
+    prefs.font_size = clamp_font_size(prefs.font_size);
+    prefs.layout = normalize_layout(&prefs.layout);
     Ok(prefs)
 }
 

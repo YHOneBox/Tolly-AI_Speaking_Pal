@@ -1,7 +1,7 @@
 {
   "name": "ai-speaking-pal",
   "private": true,
-  "version": "0.2.0",
+  "version": "0.3.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -9,7 +9,7 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "desktop": "tauri dev",
-    "icons": "node scripts/generate-icon.mjs",
+    "icons": "tauri icon logo.png && node scripts/generate-icon.mjs",
     "build:portable": "tauri build --no-bundle",
     "build:macos": "tauri build --bundles app,dmg",
     "build:linux": "tauri build --bundles appimage"

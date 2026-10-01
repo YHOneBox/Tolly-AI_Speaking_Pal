@@ -4,8 +4,6 @@ use serde_json::{json, Value};
 use crate::dual::{canonical_json, parse_dual_output};
 use crate::error::{ensure_success, ApiError};
 use crate::prompt::SYSTEM_PROMPT;
-use crate::sse::collect_frames;
-
 const GROQ_CHAT_URL: &str = "https://api.groq.com/openai/v1/chat/completions";
 const GROQ_STT_URL: &str = "https://api.groq.com/openai/v1/audio/transcriptions";
 const GROQ_MODELS_URL: &str = "https://api.groq.com/openai/v1/models";
@@ -111,15 +109,40 @@ pub async fn converse(
     history: &[HistoryMessage],
 ) -> Result<LlmResult, ApiError> {
     let messages = build_messages(history)?;
+    let mut last_error = None;
+    for attempt in 0..2 {
+        let temperature = if attempt == 0 { 0.7 } else { 0.2 };
+        match complete_json(http, api_key, model, &messages, temperature).await {
+            Ok(result) => return Ok(result),
+            Err(error) if matches!(error, ApiError::InvalidModelOutput { .. }) && attempt == 0 => {
+                last_error = Some(error);
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Err(last_error.unwrap_or_else(|| ApiError::InvalidModelOutput {
+        message: "The model returned an empty response.".into(),
+    }))
+}
+
+async fn complete_json(
+    http: &reqwest::Client,
+    api_key: &str,
+    model: &str,
+    messages: &[Value],
+    temperature: f64,
+) -> Result<LlmResult, ApiError> {
+    // JSON mode on Groq often returns an empty body when the request is streamed,
+    // especially on the turn after the first reply. The spoken line is not played
+    // until the whole object is parsed, so a single response is the reliable path.
     let response = http
         .post(GROQ_CHAT_URL)
         .bearer_auth(api_key)
         .json(&json!({
             "model": model,
-            "temperature": 0.8,
-            "max_tokens": 420,
-            "stream": true,
-            "stream_options": { "include_usage": true },
+            "temperature": temperature,
+            "max_tokens": 800,
+            "stream": false,
             "response_format": { "type": "json_object" },
             "messages": messages,
         }))
@@ -127,34 +150,12 @@ pub async fn converse(
         .await
         .map_err(|err| ApiError::upstream(0, err.to_string()))?;
     let response = ensure_success(response).await?;
+    let payload: Value = response
+        .json()
+        .await
+        .map_err(|err| ApiError::upstream(0, err.to_string()))?;
 
-    let mut content = String::new();
-    let mut prompt_tokens = 0u64;
-    let mut completion_tokens = 0u64;
-
-    collect_frames(response, |data| {
-        if data == "[DONE]" {
-            return Ok(true);
-        }
-        let chunk: Value = serde_json::from_str(data).unwrap_or(Value::Null);
-        if let Some(delta) = chunk
-            .pointer("/choices/0/delta/content")
-            .and_then(|value| value.as_str())
-        {
-            content.push_str(delta);
-        }
-        if let Some(usage) = chunk.get("usage") {
-            if let Some(value) = usage.get("prompt_tokens").and_then(|item| item.as_u64()) {
-                prompt_tokens = value;
-            }
-            if let Some(value) = usage.get("completion_tokens").and_then(|item| item.as_u64()) {
-                completion_tokens = value;
-            }
-        }
-        Ok(false)
-    })
-    .await?;
-
+    let content = message_text(&payload);
     if content.trim().is_empty() {
         return Err(ApiError::InvalidModelOutput {
             message: "The model returned an empty response.".into(),
@@ -163,17 +164,52 @@ pub async fn converse(
 
     let output = parse_dual_output(&content).map_err(|message| ApiError::InvalidModelOutput { message })?;
     let raw_json = canonical_json(&output).map_err(|message| ApiError::InvalidModelOutput { message })?;
-
-    if prompt_tokens == 0 && completion_tokens == 0 {
-        prompt_tokens = estimate_tokens(&messages);
-        completion_tokens = (raw_json.len() as u64 / 4).max(1);
-    }
+    let prompt_tokens = payload
+        .pointer("/usage/prompt_tokens")
+        .and_then(|value| value.as_u64())
+        .unwrap_or_else(|| estimate_tokens(messages));
+    let completion_tokens = payload
+        .pointer("/usage/completion_tokens")
+        .and_then(|value| value.as_u64())
+        .unwrap_or_else(|| (raw_json.len() as u64 / 4).max(1));
 
     Ok(LlmResult {
         raw_json,
         prompt_tokens,
         completion_tokens,
     })
+}
+
+pub(crate) fn message_text(payload: &Value) -> String {
+    let message = payload.pointer("/choices/0/message");
+    let content = message
+        .and_then(|item| item.get("content"))
+        .and_then(|value| value.as_str())
+        .unwrap_or("")
+        .trim();
+    if !content.is_empty() {
+        return content.to_string();
+    }
+    if let Some(message) = message {
+        for key in ["reasoning", "reasoning_content"] {
+            let Some(text) = message.get(key).and_then(|value| value.as_str()) else {
+                continue;
+            };
+            if let Some(json) = extract_json_object(text) {
+                return json;
+            }
+        }
+    }
+    String::new()
+}
+
+fn extract_json_object(text: &str) -> Option<String> {
+    let start = text.find('{')?;
+    let end = text.rfind('}')?;
+    if end <= start {
+        return None;
+    }
+    Some(text[start..=end].to_string())
 }
 
 fn build_messages(history: &[HistoryMessage]) -> Result<Vec<Value>, ApiError> {
@@ -185,7 +221,7 @@ fn build_messages(history: &[HistoryMessage]) -> Result<Vec<Value>, ApiError> {
         "role": "system",
         "content": SYSTEM_PROMPT,
     })];
-    let start = history.len().saturating_sub(20);
+    let start = history.len().saturating_sub(8);
     for message in &history[start..] {
         let role = match message.role.as_str() {
             "user" => "user",
@@ -326,5 +362,32 @@ mod tests {
             catalog.speech.iter().map(|model| model.id.as_str()).collect::<Vec<_>>(),
             vec!["whisper-large-v3", "whisper-large-v3-turbo"]
         );
+    }
+
+    #[test]
+    fn reads_json_from_the_message_body() {
+        let payload = serde_json::json!({
+            "choices": [{
+                "message": {
+                    "content": "{\"spoken_reply\":\"Hey.\",\"visual_feedback\":[],\"skill_rating\":null}"
+                }
+            }]
+        });
+        assert!(message_text(&payload).contains("spoken_reply"));
+    }
+
+    #[test]
+    fn recovers_json_when_the_visible_content_is_empty() {
+        let payload = serde_json::json!({
+            "choices": [{
+                "message": {
+                    "content": "",
+                    "reasoning": "draft {\"spoken_reply\":\"Yeah, the cafe.\",\"visual_feedback\":[],\"skill_rating\":70}"
+                }
+            }]
+        });
+        let text = message_text(&payload);
+        assert!(text.starts_with('{'));
+        assert!(text.contains("Yeah, the cafe."));
     }
 }

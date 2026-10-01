@@ -1,25 +1,38 @@
 import { useEffect, useRef, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
 
-import { ChatTranscript } from "./components/ChatTranscript";
 import { Composer } from "./components/Composer";
 import { RateLimitBanner } from "./components/RateLimitBanner";
 import { SettingsModal } from "./components/SettingsModal";
-import { bootstrap, cancelSpeech, converse, saveSettings, speak, transcribe } from "./lib/api";
+import { Stage } from "./components/Stage";
+import {
+  applyUpdate,
+  bootstrap,
+  cancelSpeech,
+  checkUpdate,
+  converse,
+  speak,
+  transcribe,
+  type UpdateOffer,
+  type UpdateProgress,
+} from "./lib/api";
 import { decodeBase64, PcmPlayer, SpeechCapture } from "./lib/audio";
 import { isDesktopShell, toCommandError } from "./lib/errors";
 import { blendSkill, estimateSkill, parseDualOutput, speakingBand } from "./lib/parseReply";
 import {
   DEFAULT_PREFERENCES,
-  normalizeCaptureMode,
+  normalizeFontSize,
+  normalizeLayout,
   usageTotal,
+  type AppLayout,
   type Bootstrap,
-  type CaptureMode,
   type ChatMessage,
   type CommandError,
   type Phase,
 } from "./types";
 
 const EMPTY_SESSION: Bootstrap = {
+  version: "0.3.0",
   groqConfigured: false,
   cartesiaConfigured: false,
   preferences: DEFAULT_PREFERENCES,
@@ -30,34 +43,56 @@ const EMPTY_SESSION: Bootstrap = {
 export default function App() {
   const desktop = isDesktopShell();
   const [session, setSession] = useState<Bootstrap>(EMPTY_SESSION);
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [skillRating, setSkillRating] = useState<number | null>(null);
-  const [draft, setDraft] = useState("");
-  const [phase, setPhase] = useState<Phase>("idle");
+  const [youSaid, setYouSaid] = useState<string | null>(null);
+  const [latestNotes, setLatestNotes] = useState<string[]>([]);
+  const [earlierNotes, setEarlierNotes] = useState<string[]>([]);
+  const [tollySaid, setTollySaid] = useState<string | null>(null);
+  const [heardYou, setHeardYou] = useState(false);
+  const [phase, setPhaseState] = useState<Phase>("idle");
+  const [micOpen, setMicOpen] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [rateLimit, setRateLimit] = useState<CommandError | null>(null);
   const [budgetNote, setBudgetNote] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [captureMode, setCaptureMode] = useState<CaptureMode>("vad");
+  const [appearanceDraft, setAppearanceDraft] = useState<{ fontSize: number; layout: AppLayout } | null>(null);
+  const [update, setUpdate] = useState<UpdateOffer | null>(null);
+  const [updateError, setUpdateError] = useState<string | null>(null);
+  const [updating, setUpdating] = useState(false);
+  const [updateReceived, setUpdateReceived] = useState(0);
+  const [updateTotal, setUpdateTotal] = useState(0);
 
-  const messagesRef = useRef(messages);
   const sessionRef = useRef(session);
+  const messagesRef = useRef<ChatMessage[]>([]);
+  const latestNotesRef = useRef<string[]>([]);
   const listeningRef = useRef(false);
   const holdingRef = useRef(false);
   const holdWantedRef = useRef(false);
   const lockRef = useRef(false);
   const turnGen = useRef(0);
+  const phaseRef = useRef<Phase>("idle");
   const captureRef = useRef<SpeechCapture | null>(null);
+  const openingMic = useRef<Promise<SpeechCapture> | null>(null);
   const playerRef = useRef<PcmPlayer | null>(null);
+  const bargeTimer = useRef<number | null>(null);
   const onUtteranceRef = useRef<(wav: Uint8Array) => void>(() => undefined);
+  const onSpeechStartRef = useRef<() => void>(() => undefined);
 
-  useEffect(() => {
-    messagesRef.current = messages;
-  }, [messages]);
+  function setPhase(next: Phase): void {
+    phaseRef.current = next;
+    setPhaseState(next);
+  }
 
   useEffect(() => {
     sessionRef.current = session;
   }, [session]);
+
+  const fontSize = normalizeFontSize(appearanceDraft?.fontSize ?? session.preferences.fontSize);
+  const layout = normalizeLayout(appearanceDraft?.layout ?? session.preferences.layout);
+
+  useEffect(() => {
+    document.documentElement.style.fontSize = `${fontSize}px`;
+  }, [fontSize]);
 
   useEffect(() => {
     if (!desktop) {
@@ -67,17 +102,25 @@ export default function App() {
     void (async () => {
       try {
         const next = await bootstrap();
-        if (!cancelled) {
-          setSession(next);
-          setCaptureMode(normalizeCaptureMode(next.preferences.captureMode));
-          if (usageTotal(next.usage) / next.preferences.dailyTokenBudget >= next.warningRatio) {
-            setBudgetNote("You have used most of today's token budget.");
-          }
+        if (cancelled) {
+          return;
+        }
+        setSession(next);
+        if (usageTotal(next.usage) / next.preferences.dailyTokenBudget >= next.warningRatio) {
+          setBudgetNote("You have used most of today's token budget.");
         }
       } catch (error: unknown) {
         if (!cancelled) {
           setNotice(toCommandError(error).message);
         }
+      }
+      try {
+        const offer = await checkUpdate();
+        if (!cancelled) {
+          setUpdate(offer);
+        }
+      } catch {
+        // A failed check stays quiet until Settings asks again.
       }
     })();
     return () => {
@@ -86,9 +129,34 @@ export default function App() {
   }, [desktop]);
 
   useEffect(() => {
+    if (!desktop || !updating) {
+      return;
+    }
+    let unlisten: (() => void) | null = null;
+    let closed = false;
+    void listen<UpdateProgress>("update-progress", (event) => {
+      setUpdateReceived(event.payload.received);
+      setUpdateTotal(event.payload.total);
+    }).then((stop) => {
+      if (closed) {
+        stop();
+        return;
+      }
+      unlisten = stop;
+    });
+    return () => {
+      closed = true;
+      unlisten?.();
+    };
+  }, [desktop, updating]);
+
+  useEffect(() => {
     return () => {
       void captureRef.current?.stop();
       playerRef.current?.stop();
+      if (bargeTimer.current !== null) {
+        window.clearTimeout(bargeTimer.current);
+      }
     };
   }, []);
 
@@ -97,6 +165,13 @@ export default function App() {
       playerRef.current = new PcmPlayer();
     }
     return playerRef.current;
+  }
+
+  function clearBargeTimer(): void {
+    if (bargeTimer.current !== null) {
+      window.clearTimeout(bargeTimer.current);
+      bargeTimer.current = null;
+    }
   }
 
   function showFailure(error: unknown): void {
@@ -112,27 +187,119 @@ export default function App() {
     setNotice(command.message);
   }
 
+  function keysReady(): boolean {
+    return sessionRef.current.groqConfigured && sessionRef.current.cartesiaConfigured;
+  }
+
+  function requireReady(): boolean {
+    if (!desktop) {
+      setNotice("Open the desktop app to capture speech and call the APIs.");
+      return false;
+    }
+    if (!keysReady()) {
+      setSettingsOpen(true);
+      setNotice("Add both API keys in Settings first.");
+      return false;
+    }
+    return true;
+  }
+
+  function cutAssistant(): void {
+    turnGen.current += 1;
+    lockRef.current = false;
+    clearBargeTimer();
+    captureRef.current?.setBargeIn(false);
+    void cancelSpeech();
+    player().stop();
+  }
+
+  function remember(message: ChatMessage): void {
+    messagesRef.current = [...messagesRef.current, message].slice(-8);
+  }
+
+  async function ensureCapture(): Promise<SpeechCapture> {
+    if (captureRef.current) {
+      return captureRef.current;
+    }
+    if (openingMic.current) {
+      return openingMic.current;
+    }
+    const pending = (async () => {
+      const capture = new SpeechCapture(
+        (wav) => onUtteranceRef.current(wav),
+        () => onSpeechStartRef.current(),
+      );
+      await capture.start();
+      captureRef.current = capture;
+      return capture;
+    })();
+    openingMic.current = pending;
+    try {
+      return await pending;
+    } finally {
+      openingMic.current = null;
+    }
+  }
+
+  async function armBarge(generation: number): Promise<void> {
+    try {
+      const capture = await ensureCapture();
+      if (generation !== turnGen.current) {
+        return;
+      }
+      capture.setPaused(false);
+      clearBargeTimer();
+      bargeTimer.current = window.setTimeout(() => {
+        if (generation === turnGen.current) {
+          captureRef.current?.setBargeIn(true);
+        }
+      }, 700);
+    } catch {
+      // The reply still plays. The button can cut in if the microphone is unavailable.
+    }
+  }
+
   function finishListeningState(generation: number): void {
     if (generation !== turnGen.current) {
       return;
     }
     lockRef.current = false;
+    clearBargeTimer();
+    captureRef.current?.setBargeIn(false);
     if (listeningRef.current) {
       captureRef.current?.setPaused(false);
       setPhase("listening");
       return;
     }
-    setPhase("idle");
+    const capture = captureRef.current;
+    captureRef.current = null;
+    void capture?.stop();
+    if (!holdingRef.current) {
+      setPhase("idle");
+    }
   }
 
   async function runTurn(userText: string, generation: number, shown = true): Promise<void> {
     const history = [
-      ...messagesRef.current.map((message) => ({ role: message.role, content: message.text })),
+      ...messagesRef.current.map((message) => ({
+        role: message.role,
+        content:
+          message.role === "assistant"
+            ? JSON.stringify({
+                spoken_reply: message.text,
+                visual_feedback: [],
+                skill_rating: message.skillRating ?? null,
+              })
+            : message.text,
+      })),
       { role: "user" as const, content: userText },
     ];
     if (shown) {
-      setMessages((current) => [...current, { id: crypto.randomUUID(), role: "user", text: userText }]);
+      remember({ id: crypto.randomUUID(), role: "user", text: userText });
     }
+    captureRef.current?.setBargeIn(false);
+    captureRef.current?.setPaused(true);
+    clearBargeTimer();
     setPhase("thinking");
     setNotice(null);
     const result = await converse(history);
@@ -143,16 +310,20 @@ export default function App() {
     if (shown) {
       const next = parsed.skillRating ?? estimateSkill(parsed.visualFeedback.length);
       setSkillRating((current) => blendSkill(current, next));
+      setEarlierNotes((current) => [...latestNotesRef.current, ...current].filter((note) => note.length > 0).slice(0, 6));
+      latestNotesRef.current = parsed.visualFeedback;
+      setLatestNotes(parsed.visualFeedback);
+      setYouSaid(userText);
+      setHeardYou(true);
     }
-    setMessages((current) => [
-      ...current,
-      {
-        id: crypto.randomUUID(),
-        role: "assistant",
-        text: parsed.spokenReply,
-        feedback: parsed.visualFeedback,
-      },
-    ]);
+    setTollySaid(parsed.spokenReply);
+    remember({
+      id: crypto.randomUUID(),
+      role: "assistant",
+      text: parsed.spokenReply,
+      feedback: parsed.visualFeedback,
+      skillRating: parsed.skillRating,
+    });
     setSession((current) => ({
       ...current,
       usage: {
@@ -169,6 +340,10 @@ export default function App() {
     playback.resume();
     playback.stop();
     setPhase("speaking");
+    await armBarge(generation);
+    if (generation !== turnGen.current) {
+      return;
+    }
     await speak(parsed.spokenReply, turnId, (chunk) => {
       if (generation !== turnGen.current) {
         return;
@@ -179,15 +354,29 @@ export default function App() {
       return;
     }
     await playback.waitUntilDone();
+    if (generation !== turnGen.current) {
+      return;
+    }
+    clearBargeTimer();
+    captureRef.current?.setBargeIn(false);
   }
 
+  onSpeechStartRef.current = () => {
+    if (phaseRef.current !== "speaking") {
+      return;
+    }
+    cutAssistant();
+    setPhase("listening");
+  };
+
   onUtteranceRef.current = (wav) => {
-    if (lockRef.current || (!listeningRef.current && !holdingRef.current)) {
+    if (lockRef.current) {
       return;
     }
     const generation = turnGen.current;
     lockRef.current = true;
     captureRef.current?.setPaused(true);
+    captureRef.current?.setBargeIn(false);
     void (async () => {
       try {
         setPhase("transcribing");
@@ -214,6 +403,7 @@ export default function App() {
     listeningRef.current = false;
     holdingRef.current = false;
     holdWantedRef.current = false;
+    setMicOpen(false);
     const capture = captureRef.current;
     captureRef.current = null;
     await capture?.stop();
@@ -222,57 +412,66 @@ export default function App() {
     }
   }
 
-  async function chooseCaptureMode(mode: CaptureMode): Promise<void> {
-    if (mode === captureMode) {
-      return;
-    }
-    await releaseMic();
-    const preferences = { ...sessionRef.current.preferences, captureMode: mode };
-    setCaptureMode(mode);
-    setSession((current) => ({ ...current, preferences }));
-    if (!desktop) {
+  async function startContinuous(): Promise<void> {
+    if (!requireReady()) {
       return;
     }
     try {
-      const next = await saveSettings({ preferences });
-      setSession(next);
-      setCaptureMode(normalizeCaptureMode(next.preferences.captureMode));
+      player().resume();
+      const capture = await ensureCapture();
+      capture.setPaused(false);
+      listeningRef.current = true;
+      setMicOpen(true);
+      setPhase("listening");
     } catch (error: unknown) {
-      setNotice(toCommandError(error).message);
+      const name = error instanceof DOMException ? error.name : "";
+      setNotice(name === "NotAllowedError" ? "Microphone permission was blocked." : toCommandError(error).message);
+      setPhase("idle");
     }
+  }
+
+  async function onShortPress(): Promise<void> {
+    setNotice(null);
+    const busy = phaseRef.current === "speaking" || phaseRef.current === "thinking" || phaseRef.current === "transcribing";
+    if (busy) {
+      cutAssistant();
+    }
+    if (listeningRef.current && !busy) {
+      await releaseMic();
+      return;
+    }
+    if (!listeningRef.current) {
+      await startContinuous();
+      return;
+    }
+    setPhase("listening");
   }
 
   async function holdStart(): Promise<void> {
     setNotice(null);
-    if (lockRef.current || holdingRef.current) {
+    if (holdingRef.current) {
       return;
     }
-    if (!desktop) {
-      setNotice("Open the desktop app to capture speech and call the APIs.");
+    const busy = phaseRef.current === "speaking" || phaseRef.current === "thinking" || phaseRef.current === "transcribing";
+    if (busy) {
+      cutAssistant();
+    }
+    if (!requireReady()) {
       return;
     }
-    if (!sessionRef.current.groqConfigured || !sessionRef.current.cartesiaConfigured) {
-      setSettingsOpen(true);
-      setNotice("Add both API keys in Settings first.");
-      return;
-    }
-
     holdWantedRef.current = true;
     holdingRef.current = true;
     setPhase("listening");
     try {
       player().resume();
-      const capture = new SpeechCapture((wav) => onUtteranceRef.current(wav));
-      capture.setMode("hold");
-      captureRef.current = capture;
-      await capture.start();
+      const capture = await ensureCapture();
       if (!holdWantedRef.current) {
-        await capture.stop();
-        if (captureRef.current === capture) {
-          captureRef.current = null;
-        }
         holdingRef.current = false;
-        setPhase("idle");
+        if (!listeningRef.current) {
+          captureRef.current = null;
+          await capture.stop();
+          setPhase("idle");
+        }
         setNotice("Hold the button until you finish the sentence.");
         return;
       }
@@ -280,10 +479,9 @@ export default function App() {
     } catch (error: unknown) {
       holdingRef.current = false;
       holdWantedRef.current = false;
-      captureRef.current = null;
       const name = error instanceof DOMException ? error.name : "";
       setNotice(name === "NotAllowedError" ? "Microphone permission was blocked." : toCommandError(error).message);
-      setPhase("idle");
+      setPhase(listeningRef.current ? "listening" : "idle");
     }
   }
 
@@ -295,54 +493,12 @@ export default function App() {
     const capture = captureRef.current;
     const emitted = capture?.endHold() ?? false;
     holdingRef.current = false;
-    listeningRef.current = false;
-    captureRef.current = null;
-    await capture?.stop();
-    if (!emitted && !lockRef.current) {
-      setPhase("idle");
-    }
-  }
-
-  async function toggleMic(): Promise<void> {
-    setNotice(null);
-    if (!desktop) {
-      setNotice("Open the desktop app to capture speech and call the APIs.");
-      return;
-    }
-    if (listeningRef.current || lockRef.current) {
-      turnGen.current += 1;
-      listeningRef.current = false;
-      lockRef.current = false;
-      await cancelSpeech();
-      player().stop();
-      await captureRef.current?.stop();
+    if (!listeningRef.current && capture) {
       captureRef.current = null;
-      setPhase("idle");
-      return;
+      await capture.stop();
     }
-
-    if (!session.groqConfigured || !session.cartesiaConfigured) {
-      setSettingsOpen(true);
-      setNotice("Add both API keys in Settings first.");
-      return;
-    }
-
-    try {
-      player().resume();
-      const capture = new SpeechCapture((wav) => onUtteranceRef.current(wav));
-      capture.setMode("vad");
-      await capture.start();
-      captureRef.current = capture;
-      listeningRef.current = true;
-      setPhase("listening");
-    } catch (error: unknown) {
-      const name = error instanceof DOMException ? error.name : "";
-      setNotice(
-        name === "NotAllowedError"
-          ? "Microphone permission was blocked."
-          : toCommandError(error).message,
-      );
-      setPhase("idle");
+    if (!emitted && !lockRef.current) {
+      setPhase(listeningRef.current ? "listening" : "idle");
     }
   }
 
@@ -350,18 +506,11 @@ export default function App() {
     if (lockRef.current || messagesRef.current.length > 0) {
       return;
     }
-    if (!desktop) {
-      setNotice("Open the desktop app to start the conversation.");
-      return;
-    }
-    if (!session.groqConfigured || !session.cartesiaConfigured) {
-      setSettingsOpen(true);
-      setNotice("Add both API keys in Settings first.");
+    if (!requireReady()) {
       return;
     }
     const generation = turnGen.current;
     lockRef.current = true;
-    captureRef.current?.setPaused(true);
     try {
       player().resume();
       await runTurn("(just sat down)", generation, false);
@@ -374,47 +523,70 @@ export default function App() {
     }
   }
 
-  async function submitDraft(): Promise<void> {
-    const text = draft.trim();
-    if (!text || lockRef.current) {
-      return;
-    }
+  async function refreshUpdate(): Promise<void> {
     if (!desktop) {
-      setNotice("Open the desktop app to send this to Groq and Cartesia.");
+      setUpdateError("Open the desktop app to check GitHub.");
       return;
     }
-    if (!session.groqConfigured || !session.cartesiaConfigured) {
-      setSettingsOpen(true);
-      setNotice("Add both API keys in Settings first.");
-      return;
-    }
-    const generation = turnGen.current;
-    lockRef.current = true;
-    captureRef.current?.setPaused(true);
-    setDraft("");
+    setUpdateError(null);
     try {
-      player().resume();
-      await runTurn(text, generation);
+      setUpdate(await checkUpdate());
     } catch (error: unknown) {
-      if (generation === turnGen.current) {
-        showFailure(error);
-      }
-    } finally {
-      finishListeningState(generation);
+      setUpdateError(toCommandError(error).message);
+    }
+  }
+
+  async function installUpdate(): Promise<void> {
+    if (!desktop) {
+      setUpdateError("Open the desktop app to install an update.");
+      return;
+    }
+    setUpdating(true);
+    setUpdateError(null);
+    setUpdateReceived(0);
+    setUpdateTotal(0);
+    try {
+      await applyUpdate();
+    } catch (error: unknown) {
+      setUpdating(false);
+      setUpdateError(toCommandError(error).message);
     }
   }
 
   const total = usageTotal(session.usage);
   const budget = session.preferences.dailyTokenBudget;
-  const keysReady = session.groqConfigured && session.cartesiaConfigured;
+  const ready = session.groqConfigured && session.cartesiaConfigured;
+  const shell = layout === "center" ? "max-w-3xl" : "max-w-5xl";
+  const facing = heardYou || Boolean(tollySaid);
+  const scene =
+    layout === "split"
+      ? "grid items-center gap-10 md:grid-cols-[minmax(0,1fr)_auto] md:items-start"
+      : facing
+        ? "flex flex-col items-center justify-start gap-8"
+        : "flex flex-col items-center justify-center gap-8";
+  const bodyClass =
+    layout === "split" ? "order-1 justify-self-center md:sticky md:top-8 md:order-2" : facing ? "sticky top-4 z-10" : "";
+  const stage = (
+    <Stage
+      layout={layout}
+      youSaid={youSaid}
+      notes={latestNotes}
+      earlier={earlierNotes}
+      tollySaid={tollySaid}
+      heardYou={heardYou}
+      keysReady={ready}
+      onOpenSettings={() => setSettingsOpen(true)}
+      onStartTalking={() => void startTalking()}
+    />
+  );
 
   return (
     <div className="flex h-full flex-col bg-paper text-ink">
-      <header className="border-b border-line px-6 py-4">
-        <div className="mx-auto flex max-w-3xl items-center justify-between gap-4">
+      <header className="border-b border-line/80 bg-paper/80 px-6 py-3 backdrop-blur">
+        <div className={`mx-auto flex ${shell} items-center justify-between gap-4`}>
           <div>
-            <p className="font-serif text-2xl leading-none">Tolly</p>
-            <p className="mt-1 text-sm text-muted">Talk about whatever comes up.</p>
+            <p className="text-sm font-medium tracking-[0.32em] text-accent">TOLLY</p>
+            <p className="mt-1 text-xs text-muted">v{session.version}</p>
           </div>
           <div className="flex items-center gap-4">
             <div
@@ -426,10 +598,10 @@ export default function App() {
               }
             >
               <p className="text-[0.65rem] uppercase tracking-[0.16em] text-muted">Speaking</p>
-              <p className="font-serif text-3xl leading-none">{skillRating ?? "—"}</p>
+              <p className="text-3xl font-medium leading-none tracking-tight text-accent">{skillRating ?? "—"}</p>
               <p className="text-xs text-muted">{skillRating === null ? "Not yet" : speakingBand(skillRating)}</p>
             </div>
-            <p className={budgetNote ? "text-sm text-accent" : "text-sm text-muted"}>
+            <p className={budgetNote ? "text-sm text-accent" : "hidden text-sm text-muted sm:block"}>
               {total.toLocaleString()} / {budget.toLocaleString()} tokens today
             </p>
             <button
@@ -441,37 +613,63 @@ export default function App() {
             </button>
           </div>
         </div>
-        {budgetNote && <p className="mx-auto mt-2 max-w-3xl text-sm text-accent">{budgetNote}</p>}
+        {budgetNote && <p className={`mx-auto mt-2 ${shell} text-sm text-accent`}>{budgetNote}</p>}
         {!desktop && (
-          <p className="mx-auto mt-2 max-w-3xl text-sm text-muted">
+          <p className={`mx-auto mt-2 ${shell} text-sm text-muted`}>
             Browser preview. Key storage, Groq, and Cartesia run inside the portable desktop app.
           </p>
         )}
       </header>
+      {update?.available && (
+        <div className="border-b border-line bg-note px-6 py-2">
+          <div className={`mx-auto flex ${shell} items-center justify-between gap-3 text-sm`}>
+            <p>Version {update.latest} is on GitHub.</p>
+            <button
+              type="button"
+              className="rounded-full bg-ink px-3 py-1 text-paper disabled:opacity-50"
+              disabled={updating}
+              onClick={() => void installUpdate()}
+            >
+              {updating ? "Installing…" : "Update"}
+            </button>
+          </div>
+        </div>
+      )}
       {rateLimit && <RateLimitBanner error={rateLimit} onDismiss={() => setRateLimit(null)} />}
-      <main className="min-h-0 flex-1 overflow-y-auto">
-        <ChatTranscript
-          messages={messages}
-          keysReady={keysReady}
-          captureMode={captureMode}
-          onOpenSettings={() => setSettingsOpen(true)}
-          onStartTalking={() => void startTalking()}
-        />
+      <main className="relative min-h-0 flex-1 overflow-y-auto">
+        <div className="tech-grid pointer-events-none absolute inset-0" aria-hidden="true" />
+        <div className={`relative mx-auto min-h-full ${shell} px-6 py-8 ${scene}`}>
+          {layout === "split" && <div className="order-2 min-w-0 w-full md:order-1">{stage}</div>}
+          <div className={bodyClass}>
+            <Composer
+              phase={phase}
+              notice={notice}
+              micOpen={micOpen}
+              onShortPress={() => void onShortPress()}
+              onHoldStart={() => void holdStart()}
+              onHoldEnd={() => void holdEnd()}
+            />
+          </div>
+          {layout !== "split" && <div className="w-full">{stage}</div>}
+        </div>
       </main>
-      <Composer
-        draft={draft}
-        phase={phase}
-        notice={notice}
-        captureMode={captureMode}
-        onDraftChange={setDraft}
-        onSubmit={() => void submitDraft()}
-        onToggleMic={() => void toggleMic()}
-        onCaptureMode={(mode) => void chooseCaptureMode(mode)}
-        onHoldStart={() => void holdStart()}
-        onHoldEnd={() => void holdEnd()}
-      />
       {settingsOpen && (
-        <SettingsModal session={session} onClose={() => setSettingsOpen(false)} onSession={setSession} />
+        <SettingsModal
+          session={session}
+          update={update}
+          updateError={updateError}
+          updating={updating}
+          updateReceived={updateReceived}
+          updateTotal={updateTotal}
+          onCheckUpdate={() => void refreshUpdate()}
+          onApplyUpdate={() => void installUpdate()}
+          onClose={() => {
+            setAppearanceDraft(null);
+            setSettingsOpen(false);
+          }}
+          onSession={setSession}
+          onAppearance={setAppearanceDraft}
+        />
       )}
     </div>
   );

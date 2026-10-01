@@ -3,7 +3,7 @@ dist/
 .DS_Store
 *.log
 
-# API keys stay in the OS keychain and Stronghold, never in the repo.
+# API keys stay in the data folder next to the app, never in the repo.
 .env
 .env.*
 

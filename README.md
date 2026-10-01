@@ -6,8 +6,8 @@ API keys are yours. Nothing is read from a `.env` file.
 
 ## Layout
 
-- React (TypeScript, Tailwind) renders the chat, microphone, and Settings modal.
-- Rust owns the Groq and Cartesia HTTP calls, including streamed Llama tokens and Cartesia SSE audio.
+- React (TypeScript, Tailwind) keeps grammar notes in the main view, with one talk button and a Settings modal.
+- Rust owns the Groq and Cartesia HTTP calls. Cartesia audio still streams. The chat model returns one JSON object at a time, because a streamed JSON reply was coming back empty on the next turn.
 - A `data` folder next to the executable holds everything Tolly saves. API keys are in an encrypted snapshot there. Preferences and the daily token ledger are in `settings.json`. Nothing is written to the system keychain or to AppData.
 
 The model is instructed to return only:
@@ -20,7 +20,7 @@ The model is instructed to return only:
 }
 ```
 
-The UI parses that JSON, plays `spoken_reply` through Cartesia, and renders `visual_feedback` under the reply. A `429` from Groq or Cartesia is shown as a rate-limit notice. Calls stop once today's token budget is spent.
+The main view is Tolly: a round body in the center. Tap it to listen, hold it while you speak, and talk over Tolly to cut in. Grammar notes from `visual_feedback` appear under the body, or on the left in the split layout. `spoken_reply` is what Cartesia says. Settings can change the voice, speaking speed, speaking volume, font size, and layout, and can download a newer release from GitHub. A `429` from Groq or Cartesia is shown as a rate-limit notice. Calls stop once today's token budget is spent.
 
 ## Portable builds
 
@@ -31,6 +31,8 @@ npm install
 npm run icons
 npm run desktop
 ```
+
+`npm run icons` builds the window and taskbar icons from `logo.png`.
 
 Windows portable executable (a single `.exe`, no setup wizard):
 
@@ -56,18 +58,19 @@ Rust 1.77 or newer and Node 20 or newer are required. Tolly keeps its `data` fol
 
 ## GitHub release
 
-Pushing a version tag builds the portable files and attaches them to a GitHub Release. The tag must match `src-tauri/tauri.conf.json`, and the same version in `package.json` and `src-tauri/Cargo.toml`.
+This copy is 0.3.0. Push `main` to [YHOneBox/Tolly-AI_Speaking_Pal](https://github.com/YHOneBox/Tolly-AI_Speaking_Pal), then push a version tag. The tag must match `src-tauri/tauri.conf.json`, and the same version in `package.json` and `src-tauri/Cargo.toml`. The in-app updater only accepts files from that repository.
 
 ```bash
-git tag v0.2.0
-git push origin v0.2.0
+git push -u origin main
+git tag v0.3.0
+git push origin v0.3.0
 ```
 
 The workflow publishes:
 
-- `Tolly-v0.2.0-windows-x64.exe`
-- `Tolly-v0.2.0-macos.dmg` and a zipped `.app`
-- `Tolly-v0.2.0-linux-x64.AppImage`
+- `Tolly-v0.3.0-windows-x64.exe`
+- `Tolly-v0.3.0-macos.dmg` and a zipped `.app`
+- `Tolly-v0.3.0-linux-x64.AppImage`
 
 It does not build an MSI or an NSIS setup.
 

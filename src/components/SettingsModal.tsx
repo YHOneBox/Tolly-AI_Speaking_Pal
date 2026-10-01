@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState } from "react";
 
-import { clearCredentials, listGroqModels, listVoices, saveSettings } from "../lib/api";
+import { clearCredentials, listGroqModels, listVoices, previewVoice, saveSettings, type UpdateOffer } from "../lib/api";
+import { decodeBase64, PcmPlayer } from "../lib/audio";
 import { isDesktopShell, toCommandError } from "../lib/errors";
 import {
   DEFAULT_CHAT_MODEL,
@@ -9,7 +10,10 @@ import {
   FALLBACK_CHAT_MODELS,
   FALLBACK_SPEECH_MODELS,
   modelLabel,
+  normalizeFontSize,
+  normalizeLayout,
   preferModel,
+  type AppLayout,
   type Bootstrap,
   type ListedModel,
   type Preferences,
@@ -18,15 +22,39 @@ import {
 
 type SettingsModalProps = {
   session: Bootstrap;
+  update: UpdateOffer | null;
+  updateError: string | null;
+  updating: boolean;
+  updateReceived: number;
+  updateTotal: number;
+  onCheckUpdate: () => void;
+  onApplyUpdate: () => void;
   onClose: () => void;
   onSession: (session: Bootstrap) => void;
+  onAppearance: (appearance: { fontSize: number; layout: AppLayout }) => void;
 };
 
-export function SettingsModal({ session, onClose, onSession }: SettingsModalProps) {
+export function SettingsModal({
+  session,
+  update,
+  updateError,
+  updating,
+  updateReceived,
+  updateTotal,
+  onCheckUpdate,
+  onApplyUpdate,
+  onClose,
+  onSession,
+  onAppearance,
+}: SettingsModalProps) {
   const titleId = useId();
   const [groqKey, setGroqKey] = useState("");
   const [cartesiaKey, setCartesiaKey] = useState("");
-  const [preferences, setPreferences] = useState<Preferences>(session.preferences);
+  const [preferences, setPreferences] = useState<Preferences>(() => ({
+    ...session.preferences,
+    fontSize: normalizeFontSize(session.preferences.fontSize),
+    layout: normalizeLayout(session.preferences.layout),
+  }));
   const [voices, setVoices] = useState<VoiceOption[]>([]);
   const [voicesError, setVoicesError] = useState<string | null>(null);
   const [voicesLoading, setVoicesLoading] = useState(false);
@@ -36,9 +64,17 @@ export function SettingsModal({ session, onClose, onSession }: SettingsModalProp
   const [modelsLoading, setModelsLoading] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [previewing, setPreviewing] = useState(false);
+  const previewPlayer = useRef<PcmPlayer | null>(null);
   const desktop = isDesktopShell();
   const fetchedGroq = useRef("");
   const fetchedCartesia = useRef("");
+
+  useEffect(() => {
+    return () => {
+      previewPlayer.current?.stop();
+    };
+  }, []);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -179,6 +215,40 @@ export function SettingsModal({ session, onClose, onSession }: SettingsModalProp
         ...voices,
       ];
 
+  function chooseLayout(layout: AppLayout): void {
+    setPreferences((current) => ({ ...current, layout }));
+    onAppearance({ fontSize: normalizeFontSize(preferences.fontSize), layout });
+  }
+
+  async function onPreview() {
+    if (!desktop) {
+      setFormError("Open the desktop app to hear this voice.");
+      return;
+    }
+    setFormError(null);
+    setPreviewing(true);
+    const player = previewPlayer.current ?? new PcmPlayer();
+    previewPlayer.current = player;
+    player.resume();
+    player.stop();
+    try {
+      await previewVoice(
+        preferences.voiceId,
+        preferences.voiceSpeed,
+        preferences.voiceVolume,
+        "preview",
+        (chunk) => {
+          player.enqueue(decodeBase64(chunk.dataBase64), chunk.sampleRate);
+        },
+      );
+      await player.waitUntilDone();
+    } catch (error: unknown) {
+      setFormError(toCommandError(error).message);
+    } finally {
+      setPreviewing(false);
+    }
+  }
+
   async function onSave() {
     setSaving(true);
     setFormError(null);
@@ -296,6 +366,69 @@ export function SettingsModal({ session, onClose, onSession }: SettingsModalProp
             {voicesLoading && <span className="mt-1 block text-muted">Loading voices…</span>}
             {voicesError && <span className="mt-1 block text-danger">{voicesError}</span>}
           </label>
+          <SliderField
+            label="Speaking speed"
+            min={0.6}
+            max={1.5}
+            step={0.05}
+            value={preferences.voiceSpeed}
+            suffix="×"
+            onChange={(voiceSpeed) => setPreferences((current) => ({ ...current, voiceSpeed }))}
+          />
+          <SliderField
+            label="Speaking volume"
+            min={0.5}
+            max={2}
+            step={0.05}
+            value={preferences.voiceVolume}
+            suffix="×"
+            onChange={(voiceVolume) => setPreferences((current) => ({ ...current, voiceVolume }))}
+          />
+          <button
+            type="button"
+            className="rounded-full border border-line px-4 py-2 text-sm disabled:opacity-50"
+            disabled={!desktop || previewing}
+            onClick={() => void onPreview()}
+          >
+            {previewing ? "Playing…" : "Preview voice"}
+          </button>
+          <div className="rounded-2xl border border-line px-4 py-3">
+            <p className="text-sm text-muted">Layout</p>
+            <div className="mt-3">
+              <SliderField
+                label="Font size"
+                min={14}
+                max={22}
+                step={1}
+                digits={0}
+                value={preferences.fontSize}
+                suffix=" px"
+                onChange={(fontSize) => {
+                  const next = normalizeFontSize(fontSize);
+                  setPreferences((current) => ({ ...current, fontSize: next }));
+                  onAppearance({ fontSize: next, layout: preferences.layout });
+                }}
+              />
+            </div>
+            <div className="mt-4 grid grid-cols-3 gap-2" role="group" aria-label="Layout">
+              <LayoutChoice
+                active={preferences.layout === "center"}
+                label="Centered"
+                onClick={() => chooseLayout("center")}
+              />
+              <LayoutChoice
+                active={preferences.layout === "wide"}
+                label="Wide"
+                onClick={() => chooseLayout("wide")}
+              />
+              <LayoutChoice
+                active={preferences.layout === "split"}
+                label="Split"
+                onClick={() => chooseLayout("split")}
+              />
+            </div>
+            <p className="mt-2 text-sm leading-6 text-muted">{layoutHint(preferences.layout)}</p>
+          </div>
           <label className="block text-sm">
             <span className="mb-1 block text-muted">Daily token budget</span>
             <input
@@ -312,6 +445,43 @@ export function SettingsModal({ session, onClose, onSession }: SettingsModalProp
               }
             />
           </label>
+          <div className="rounded-2xl border border-line px-4 py-3">
+            <p className="text-sm text-muted">Updates</p>
+            <p className="mt-1 text-sm leading-6">
+              {update
+                ? update.available
+                  ? `Version ${update.latest} is on GitHub. This copy is ${update.current}.`
+                  : `This copy is ${update.current}, the latest release.`
+                : `This copy is ${session.version}. Tolly can download a newer portable build from GitHub.`}
+            </p>
+            {updating && (
+              <p className="mt-1 text-sm text-muted">
+                Downloading
+                {updateTotal > 0 ? ` ${Math.min(100, Math.round((updateReceived / updateTotal) * 100))}%` : "…"}
+              </p>
+            )}
+            {updateError && <p className="mt-1 text-sm text-danger">{updateError}</p>}
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button
+                type="button"
+                className="rounded-full border border-line px-3 py-1.5 text-sm disabled:opacity-50"
+                disabled={!desktop || updating}
+                onClick={onCheckUpdate}
+              >
+                Check for updates
+              </button>
+              {update?.available && (
+                <button
+                  type="button"
+                  className="rounded-full bg-ink px-3 py-1.5 text-sm text-paper disabled:opacity-50"
+                  disabled={!desktop || updating}
+                  onClick={onApplyUpdate}
+                >
+                  {updating ? "Installing…" : "Update and reopen"}
+                </button>
+              )}
+            </div>
+          </div>
         </div>
 
         {formError && <p className="mt-4 text-sm text-danger">{formError}</p>}
@@ -331,6 +501,75 @@ export function SettingsModal({ session, onClose, onSession }: SettingsModalProp
         </div>
       </div>
     </div>
+  );
+}
+
+function layoutHint(layout: AppLayout): string {
+  if (layout === "wide") {
+    return "Grammar notes use the width of the window.";
+  }
+  if (layout === "split") {
+    return "Grammar notes stay on the left. Tolly sits on the right.";
+  }
+  return "Grammar notes stay in a column in the middle.";
+}
+
+function LayoutChoice({ active, label, onClick }: { active: boolean; label: string; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      aria-pressed={active}
+      className={
+        active
+          ? "rounded-xl bg-ink px-2 py-2 text-sm text-paper"
+          : "rounded-xl border border-line px-2 py-2 text-sm text-muted hover:text-ink"
+      }
+      onClick={onClick}
+    >
+      {label}
+    </button>
+  );
+}
+
+function SliderField({
+  label,
+  min,
+  max,
+  step,
+  value,
+  suffix,
+  digits = 2,
+  onChange,
+}: {
+  label: string;
+  min: number;
+  max: number;
+  step: number;
+  value: number;
+  suffix: string;
+  digits?: number;
+  onChange: (value: number) => void;
+}) {
+  const shown = Number.isFinite(value) ? value : 1;
+  return (
+    <label className="block text-sm">
+      <span className="mb-1 flex items-center justify-between text-muted">
+        {label}
+        <span>
+          {shown.toFixed(digits)}
+          {suffix}
+        </span>
+      </span>
+      <input
+        type="range"
+        min={min}
+        max={max}
+        step={step}
+        value={shown}
+        className="w-full accent-[#3ec5ff]"
+        onChange={(event) => onChange(Number(event.target.value))}
+      />
+    </label>
   );
 }
 

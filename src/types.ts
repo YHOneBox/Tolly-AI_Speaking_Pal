@@ -3,6 +3,7 @@ export const DEFAULT_CHAT_MODEL = "llama-3.3-70b-versatile";
 export const DEFAULT_STT_MODEL = "whisper-large-v3";
 
 export type CaptureMode = "vad" | "hold";
+export type AppLayout = "center" | "wide" | "split";
 
 export type Preferences = {
   voiceId: string;
@@ -10,6 +11,10 @@ export type Preferences = {
   sttModel: string;
   dailyTokenBudget: number;
   captureMode: CaptureMode;
+  voiceSpeed: number;
+  voiceVolume: number;
+  fontSize: number;
+  layout: AppLayout;
 };
 
 export type ListedModel = {
@@ -39,6 +44,7 @@ export type TokenUsage = {
 };
 
 export type Bootstrap = {
+  version: string;
   groqConfigured: boolean;
   cartesiaConfigured: boolean;
   preferences: Preferences;
@@ -66,6 +72,7 @@ export type ChatMessage = {
   role: "user" | "assistant";
   text: string;
   feedback?: string[];
+  skillRating?: number | null;
 };
 
 export type Phase = "idle" | "listening" | "transcribing" | "thinking" | "speaking";
@@ -76,6 +83,10 @@ export const DEFAULT_PREFERENCES: Preferences = {
   sttModel: DEFAULT_STT_MODEL,
   dailyTokenBudget: 100_000,
   captureMode: "vad",
+  voiceSpeed: 1,
+  voiceVolume: 1,
+  fontSize: 16,
+  layout: "center",
 };
 
 export function modelLabel(model: ListedModel): string {
@@ -98,6 +109,20 @@ export function preferModel(models: ListedModel[], current: string, preferred: s
 
 export function normalizeCaptureMode(value: string | undefined): CaptureMode {
   return value === "hold" ? "hold" : "vad";
+}
+
+export function normalizeFontSize(value: number | undefined): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return 16;
+  }
+  return Math.min(22, Math.max(14, Math.round(value)));
+}
+
+export function normalizeLayout(value: string | undefined): AppLayout {
+  if (value === "wide" || value === "split") {
+    return value;
+  }
+  return "center";
 }
 
 export function usageTotal(usage: TokenUsage): number {

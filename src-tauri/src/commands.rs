@@ -13,6 +13,7 @@ use crate::AppState;
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Bootstrap {
+    pub version: String,
     pub groq_configured: bool,
     pub cartesia_configured: bool,
     pub preferences: Preferences,
@@ -30,6 +31,10 @@ pub struct SaveSettings {
     pub stt_model: String,
     pub daily_token_budget: u64,
     pub capture_mode: String,
+    pub voice_speed: f64,
+    pub voice_volume: f64,
+    pub font_size: u8,
+    pub layout: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -64,6 +69,7 @@ fn nonempty(value: Option<String>) -> Option<String> {
 pub fn bootstrap(app: AppHandle) -> Result<Bootstrap, ApiError> {
     let keys = secrets::status()?;
     Ok(Bootstrap {
+        version: env!("CARGO_PKG_VERSION").to_string(),
         groq_configured: keys.groq,
         cartesia_configured: keys.cartesia,
         preferences: prefs::load(&app)?,
@@ -81,6 +87,10 @@ pub fn save_settings(app: AppHandle, settings: SaveSettings) -> Result<Bootstrap
         stt_model: settings.stt_model,
         daily_token_budget: settings.daily_token_budget,
         capture_mode: settings.capture_mode,
+        voice_speed: prefs::clamp_voice_speed(settings.voice_speed),
+        voice_volume: prefs::clamp_voice_volume(settings.voice_volume),
+        font_size: prefs::clamp_font_size(settings.font_size),
+        layout: prefs::normalize_layout(&settings.layout),
     };
     prefs::save(&app, &preferences)?;
     bootstrap(app)
@@ -158,7 +168,7 @@ pub async fn speak(
 ) -> Result<(), ApiError> {
     let http = state.http.clone();
     let generation = Arc::clone(&state.speech_generation);
-    let generation_at_start = generation.load(Ordering::SeqCst);
+    let generation_at_start = generation.fetch_add(1, Ordering::SeqCst).saturating_add(1);
     let preferences = prefs::load(&app)?;
     let api_key = secrets::cartesia_key()?;
     cartesia::stream_speech(
@@ -167,11 +177,54 @@ pub async fn speak(
         &api_key,
         &transcript,
         &preferences.voice_id,
+        preferences.voice_speed,
+        preferences.voice_volume,
         &turn_id,
         &generation,
         generation_at_start,
     )
     .await
+}
+
+#[tauri::command]
+pub async fn preview_voice(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    voice_id: String,
+    voice_speed: f64,
+    voice_volume: f64,
+    turn_id: String,
+) -> Result<(), ApiError> {
+    prefs::validate_voice(&voice_id)?;
+    let speed = prefs::clamp_voice_speed(voice_speed);
+    let volume = prefs::clamp_voice_volume(voice_volume);
+    let http = state.http.clone();
+    let generation = Arc::clone(&state.speech_generation);
+    let generation_at_start = generation.fetch_add(1, Ordering::SeqCst).saturating_add(1);
+    let api_key = secrets::cartesia_key()?;
+    cartesia::stream_speech(
+        &app,
+        &http,
+        &api_key,
+        "Hey. It's good to hear you.",
+        &voice_id,
+        speed,
+        volume,
+        &turn_id,
+        &generation,
+        generation_at_start,
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn check_update(state: State<'_, AppState>) -> Result<crate::update::UpdateOffer, ApiError> {
+    crate::update::check(&state.http).await
+}
+
+#[tauri::command]
+pub async fn apply_update(app: AppHandle, state: State<'_, AppState>) -> Result<(), ApiError> {
+    crate::update::install(&app, &state.http).await
 }
 
 #[tauri::command]

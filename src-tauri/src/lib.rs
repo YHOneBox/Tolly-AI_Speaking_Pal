@@ -8,6 +8,7 @@ mod prefs;
 mod prompt;
 mod secrets;
 mod sse;
+mod update;
 
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
@@ -23,7 +24,7 @@ pub fn run() {
     let http = reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(10))
         .timeout(Duration::from_secs(120))
-        .user_agent("Tolly/0.2.0")
+        .user_agent(concat!("Tolly/", env!("CARGO_PKG_VERSION")))
         .build()
         .expect("build HTTP client");
 
@@ -57,6 +58,9 @@ pub fn run() {
             commands::converse,
             commands::speak,
             commands::cancel_speech,
+            commands::preview_voice,
+            commands::check_update,
+            commands::apply_update,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

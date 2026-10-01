@@ -1,5 +1,6 @@
 const TARGET_RATE = 16_000;
 const SPEECH_START_RMS = 0.018;
+const BARGE_START_RMS = 0.06;
 const SPEECH_CONTINUE_RMS = 0.01;
 const SILENCE_MS = 700;
 const MIN_SPEECH_MS = 280;
@@ -8,16 +9,14 @@ const PREROLL_MS = 280;
 
 type SpeechHandler = (wav: Uint8Array) => void;
 
-export type CaptureMode = "vad" | "hold";
-
 export class SpeechCapture {
   private context: AudioContext | null = null;
   private stream: MediaStream | null = null;
   private source: MediaStreamAudioSourceNode | null = null;
   private worklet: AudioWorkletNode | null = null;
   private paused = false;
-  private mode: CaptureMode = "vad";
   private holding = false;
+  private bargeIn = false;
   private speaking = false;
   private silenceMs = 0;
   private speechMs = 0;
@@ -25,9 +24,11 @@ export class SpeechCapture {
   private preroll: Float32Array[] = [];
   private utterance: Float32Array[] = [];
   private onUtterance: SpeechHandler;
+  private onSpeechStart: () => void;
 
-  constructor(onUtterance: SpeechHandler) {
+  constructor(onUtterance: SpeechHandler, onSpeechStart: () => void = () => undefined) {
     this.onUtterance = onUtterance;
+    this.onSpeechStart = onSpeechStart;
   }
 
   async start(): Promise<void> {
@@ -50,10 +51,8 @@ export class SpeechCapture {
     this.source.connect(this.worklet);
   }
 
-  setMode(mode: CaptureMode): void {
-    this.mode = mode;
-    this.holding = false;
-    this.resetBuffers();
+  setBargeIn(enabled: boolean): void {
+    this.bargeIn = enabled;
   }
 
   setPaused(paused: boolean): void {
@@ -65,9 +64,9 @@ export class SpeechCapture {
   }
 
   beginHold(): void {
-    this.mode = "hold";
     this.holding = true;
     this.paused = false;
+    this.bargeIn = false;
     this.resetBuffers();
     this.holding = true;
   }
@@ -119,10 +118,7 @@ export class SpeechCapture {
       return;
     }
 
-    if (this.mode === "hold") {
-      if (!this.holding) {
-        return;
-      }
+    if (this.holding) {
       this.utterance.push(samples);
       this.speechMs += frameMs;
       if (this.speechMs >= MAX_UTTERANCE_MS) {
@@ -140,7 +136,12 @@ export class SpeechCapture {
           this.prerollMs -= (removed.length / sampleRate) * 1000;
         }
       }
-      if (rms >= SPEECH_START_RMS) {
+      const startAt = this.bargeIn ? BARGE_START_RMS : SPEECH_START_RMS;
+      if (rms >= startAt) {
+        if (this.bargeIn) {
+          this.bargeIn = false;
+          this.onSpeechStart();
+        }
         this.speaking = true;
         this.utterance = this.preroll.splice(0);
         this.speechMs = this.prerollMs;
