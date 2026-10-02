@@ -21,7 +21,37 @@ export type Preferences = {
   /** Browser device id of the speaker. Empty means the system default. */
   outputDeviceId: string;
   micSensitivity: MicSensitivity;
+  /** Open the microphone as soon as the app starts, when both keys are saved. */
+  autoListen: boolean;
 };
+
+/** A generated conversation partner. The built-in Tolly is not stored and has no record here. */
+export type Character = {
+  id: string;
+  name: string;
+  tagline: string;
+  description: string;
+  personality: string;
+  speakingStyle: string;
+  greeting: string;
+  emoji: string;
+  prompt: string;
+  createdAt: string;
+};
+
+/** Who is talking right now: a stored character, or the built-in Tolly. */
+export type Persona = {
+  id: string;
+  name: string;
+  emoji: string | null;
+};
+
+export const TOLLY: Persona = { id: "", name: "Tolly", emoji: null };
+
+export function activePersona(characters: Character[], activeId: string): Persona {
+  const found = characters.find((character) => character.id === activeId);
+  return found ? { id: found.id, name: found.name, emoji: found.emoji } : TOLLY;
+}
 
 export type ListedModel = {
   id: string;
@@ -56,6 +86,9 @@ export type Bootstrap = {
   preferences: Preferences;
   usage: TokenUsage;
   warningRatio: number;
+  characters: Character[];
+  /** Empty when the built-in Tolly is active. */
+  activeCharacterId: string;
 };
 
 export type CommandError = {
@@ -96,6 +129,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
   inputDeviceId: "",
   outputDeviceId: "",
   micSensitivity: "normal",
+  autoListen: true,
 };
 
 export function modelLabel(model: ListedModel): string {

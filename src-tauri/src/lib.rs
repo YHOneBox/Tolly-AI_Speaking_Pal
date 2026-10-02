@@ -1,4 +1,5 @@
 mod cartesia;
+mod characters;
 mod commands;
 mod dual;
 mod error;
@@ -43,10 +44,13 @@ pub fn run() {
                 .first()
                 .cloned()
                 .ok_or_else(|| std::io::Error::other("Tolly has no window configuration."))?;
-            tauri::WebviewWindowBuilder::from_config(app.handle(), &config)?
+            let window = tauri::WebviewWindowBuilder::from_config(app.handle(), &config)?
                 .title(format!("Tolly {}", env!("CARGO_PKG_VERSION")))
-                .data_directory(data.join("webview"))
-                .build()?;
+                .data_directory(data.join("webview"));
+            // Tolly can start listening and talking as soon as it opens, before any click.
+            #[cfg(target_os = "windows")]
+            let window = window.additional_browser_args("--autoplay-policy=no-user-gesture-required");
+            window.build()?;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -62,6 +66,9 @@ pub fn run() {
             commands::preview_voice,
             commands::check_update,
             commands::apply_update,
+            commands::generate_character,
+            commands::set_active_character,
+            commands::delete_character,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

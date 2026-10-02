@@ -3,7 +3,6 @@ use serde_json::{json, Value};
 
 use crate::dual::{canonical_json, parse_dual_output};
 use crate::error::{ensure_success, ApiError};
-use crate::prompt::SYSTEM_PROMPT;
 const GROQ_CHAT_URL: &str = "https://api.groq.com/openai/v1/chat/completions";
 const GROQ_STT_URL: &str = "https://api.groq.com/openai/v1/audio/transcriptions";
 const GROQ_MODELS_URL: &str = "https://api.groq.com/openai/v1/models";
@@ -33,6 +32,14 @@ pub struct HistoryMessage {
 #[derive(Debug)]
 pub struct LlmResult {
     pub raw_json: String,
+    pub prompt_tokens: u64,
+    pub completion_tokens: u64,
+}
+
+/// One JSON object from the model, as text, with the tokens it cost.
+#[derive(Debug)]
+pub struct ObjectResult {
+    pub text: String,
     pub prompt_tokens: u64,
     pub completion_tokens: u64,
 }
@@ -102,13 +109,67 @@ pub async fn transcribe(
     Ok(text)
 }
 
+/// Asks the model for one JSON object in reply to a single user message.
+pub async fn complete_object(
+    http: &reqwest::Client,
+    api_key: &str,
+    model: &str,
+    system: &str,
+    user: &str,
+    temperature: f64,
+) -> Result<ObjectResult, ApiError> {
+    let messages = vec![
+        json!({ "role": "system", "content": system }),
+        json!({ "role": "user", "content": truncate_chars(user.trim(), 2_000) }),
+    ];
+    let response = http
+        .post(GROQ_CHAT_URL)
+        .bearer_auth(api_key)
+        .json(&json!({
+            "model": model,
+            "temperature": temperature,
+            "max_tokens": 600,
+            "stream": false,
+            "response_format": { "type": "json_object" },
+            "messages": messages,
+        }))
+        .send()
+        .await
+        .map_err(|err| ApiError::upstream(0, err.to_string()))?;
+    let response = ensure_success(response).await?;
+    let payload: Value = response
+        .json()
+        .await
+        .map_err(|err| ApiError::upstream(0, err.to_string()))?;
+    let text = message_text(&payload);
+    if text.trim().is_empty() {
+        return Err(ApiError::InvalidModelOutput {
+            message: "The model returned an empty response.".into(),
+        });
+    }
+    let prompt_tokens = payload
+        .pointer("/usage/prompt_tokens")
+        .and_then(|value| value.as_u64())
+        .unwrap_or_else(|| estimate_tokens(&messages));
+    let completion_tokens = payload
+        .pointer("/usage/completion_tokens")
+        .and_then(|value| value.as_u64())
+        .unwrap_or_else(|| (text.len() as u64 / 4).max(1));
+    Ok(ObjectResult {
+        text,
+        prompt_tokens,
+        completion_tokens,
+    })
+}
+
 pub async fn converse(
     http: &reqwest::Client,
     api_key: &str,
     model: &str,
+    system_prompt: &str,
     history: &[HistoryMessage],
 ) -> Result<LlmResult, ApiError> {
-    let messages = build_messages(history)?;
+    let messages = build_messages(system_prompt, history)?;
     let mut last_error = None;
     for attempt in 0..2 {
         let temperature = if attempt == 0 { 0.7 } else { 0.2 };
@@ -212,14 +273,14 @@ fn extract_json_object(text: &str) -> Option<String> {
     Some(text[start..=end].to_string())
 }
 
-fn build_messages(history: &[HistoryMessage]) -> Result<Vec<Value>, ApiError> {
+fn build_messages(system_prompt: &str, history: &[HistoryMessage]) -> Result<Vec<Value>, ApiError> {
     if history.is_empty() {
         return Err(ApiError::bad("Say or type something first."));
     }
 
     let mut messages = vec![json!({
         "role": "system",
-        "content": SYSTEM_PROMPT,
+        "content": system_prompt,
     })];
     let start = history.len().saturating_sub(8);
     for message in &history[start..] {
@@ -362,6 +423,18 @@ mod tests {
             catalog.speech.iter().map(|model| model.id.as_str()).collect::<Vec<_>>(),
             vec!["whisper-large-v3", "whisper-large-v3-turbo"]
         );
+    }
+
+    #[test]
+    fn the_system_prompt_leads_the_messages() {
+        let history = vec![HistoryMessage {
+            role: "user".into(),
+            content: "Hi there".into(),
+        }];
+        let messages = build_messages("You are Mara.", &history).unwrap();
+        assert_eq!(messages[0]["role"], "system");
+        assert_eq!(messages[0]["content"], "You are Mara.");
+        assert_eq!(messages[1]["content"], "Hi there");
     }
 
     #[test]

@@ -54,8 +54,24 @@ export async function saveSettings(input: {
       inputDeviceId: input.preferences.inputDeviceId ?? "",
       outputDeviceId: input.preferences.outputDeviceId ?? "",
       micSensitivity: input.preferences.micSensitivity ?? "normal",
+      autoListen: input.preferences.autoListen ?? true,
     },
   });
+}
+
+export async function generateCharacter(prompt: string): Promise<Bootstrap> {
+  assertDesktop();
+  return invoke<Bootstrap>("generate_character", { prompt });
+}
+
+export async function setActiveCharacter(id: string): Promise<Bootstrap> {
+  assertDesktop();
+  return invoke<Bootstrap>("set_active_character", { id });
+}
+
+export async function deleteCharacter(id: string): Promise<Bootstrap> {
+  assertDesktop();
+  return invoke<Bootstrap>("delete_character", { id });
 }
 
 export async function clearCredentials(): Promise<Bootstrap> {

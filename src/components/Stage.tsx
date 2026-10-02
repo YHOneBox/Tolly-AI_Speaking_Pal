@@ -1,9 +1,10 @@
-import type { AppLayout, Phase } from "../types";
+import type { AppLayout, Persona, Phase } from "../types";
 import { Face } from "./Avatar";
 
 type StageProps = {
   layout: AppLayout;
   phase: Phase;
+  persona: Persona;
   youSaid: string | null;
   notes: string[];
   earlier: string[];
@@ -17,6 +18,7 @@ type StageProps = {
 export function Stage({
   layout,
   phase,
+  persona,
   youSaid,
   notes,
   earlier,
@@ -29,14 +31,21 @@ export function Stage({
   if (!heardYou && !tollySaid) {
     return (
       <div className="mx-auto w-full max-w-md text-center">
+        {persona.emoji && (
+          <span className="mx-auto mb-3 grid h-14 w-14 place-items-center rounded-full bg-note text-3xl" aria-hidden="true">
+            {persona.emoji}
+          </span>
+        )}
         <h1 className="text-2xl font-semibold tracking-tight">Hi there!</h1>
         <p className="mt-2 text-sm leading-6 text-muted">
-          Tap the microphone and say anything, or hold it while you speak. Tolly answers like a friend, and quiet
-          grammar notes show up here.
+          {phase === "listening"
+            ? `${persona.name} is listening. Just start talking, or hold the microphone while you speak.`
+            : `Tap the microphone and say anything, or hold it while you speak.`}{" "}
+          {persona.name} answers like a friend, and quiet grammar notes show up here.
         </p>
         <div className="mt-5 flex flex-wrap items-center justify-center gap-3">
           <button type="button" className="btn-primary rounded-full px-5 py-2.5 text-sm font-medium" onClick={onStartTalking}>
-            Let Tolly start
+            Let {persona.name} start
           </button>
           {!keysReady && (
             <button type="button" className="pill rounded-full px-5 py-2.5 text-sm" onClick={onOpenSettings}>
@@ -58,9 +67,15 @@ export function Stage({
       )}
       {tollySaid && (
         <div className="flex items-start gap-3">
-          <Face phase={phase} small />
+          {persona.emoji ? (
+            <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-note text-base" aria-hidden="true">
+              {persona.emoji}
+            </span>
+          ) : (
+            <Face phase={phase} small />
+          )}
           <div className="pill min-w-0 flex-1 rounded-2xl rounded-tl-md px-4 py-3">
-            <p className="text-xs font-medium text-accent">Tolly</p>
+            <p className="text-xs font-medium text-accent">{persona.name}</p>
             <p className="mt-1 text-base leading-6">{tollySaid}</p>
           </div>
         </div>

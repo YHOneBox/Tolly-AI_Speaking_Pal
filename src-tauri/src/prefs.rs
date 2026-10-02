@@ -42,6 +42,13 @@ pub struct Preferences {
     pub output_device_id: String,
     #[serde(default = "default_mic_sensitivity")]
     pub mic_sensitivity: String,
+    /// Open the microphone as soon as the app starts, when both keys are saved.
+    #[serde(default = "default_true")]
+    pub auto_listen: bool,
+}
+
+pub fn default_true() -> bool {
+    true
 }
 
 fn default_capture_mode() -> String {
@@ -127,6 +134,7 @@ impl Default for Preferences {
             input_device_id: String::new(),
             output_device_id: String::new(),
             mic_sensitivity: default_mic_sensitivity(),
+            auto_listen: true,
         }
     }
 }
@@ -175,11 +183,11 @@ fn open<R: Runtime>(
         .map_err(|err| ApiError::storage(err.to_string()))
 }
 
-fn read_json<R: Runtime>(app: &AppHandle<R>, key: &str) -> Result<Option<Value>, ApiError> {
+pub(crate) fn read_json<R: Runtime>(app: &AppHandle<R>, key: &str) -> Result<Option<Value>, ApiError> {
     Ok(open(app)?.get(key))
 }
 
-fn write_json<R: Runtime>(app: &AppHandle<R>, key: &str, value: &impl Serialize) -> Result<(), ApiError> {
+pub(crate) fn write_json<R: Runtime>(app: &AppHandle<R>, key: &str, value: &impl Serialize) -> Result<(), ApiError> {
     let store = open(app)?;
     let json = serde_json::to_value(value).map_err(|err| ApiError::storage(err.to_string()))?;
     store.set(key, json);

@@ -1,6 +1,16 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 
-import { clearCredentials, listGroqModels, listVoices, previewVoice, saveSettings, type UpdateOffer } from "../lib/api";
+import {
+  clearCredentials,
+  deleteCharacter,
+  generateCharacter,
+  listGroqModels,
+  listVoices,
+  previewVoice,
+  saveSettings,
+  setActiveCharacter,
+  type UpdateOffer,
+} from "../lib/api";
 import {
   decodeBase64,
   listAudioDevices,
@@ -24,11 +34,13 @@ import {
   preferModel,
   type AppLayout,
   type Bootstrap,
+  type Character,
   type ListedModel,
   type MicSensitivity,
   type Preferences,
   type VoiceOption,
 } from "../types";
+import { Face } from "./Avatar";
 import { VoiceBar } from "./VoiceBar";
 
 type SettingsModalProps = {
@@ -45,12 +57,13 @@ type SettingsModalProps = {
   onAppearance: (appearance: { fontSize: number; layout: AppLayout }) => void;
 };
 
-type Tab = "keys" | "voice" | "mic" | "look" | "about";
+type Tab = "keys" | "character" | "voice" | "mic" | "look" | "about";
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "keys", label: "Keys" },
+  { id: "character", label: "Character" },
   { id: "voice", label: "Voice" },
-  { id: "mic", label: "Microphone" },
+  { id: "mic", label: "Mic" },
   { id: "look", label: "Look" },
   { id: "about", label: "About" },
 ];
@@ -69,7 +82,7 @@ export function SettingsModal({
   onAppearance,
 }: SettingsModalProps) {
   const titleId = useId();
-  const [tab, setTab] = useState<Tab>(session.groqConfigured && session.cartesiaConfigured ? "voice" : "keys");
+  const [tab, setTab] = useState<Tab>(session.groqConfigured && session.cartesiaConfigured ? "character" : "keys");
   const [groqKey, setGroqKey] = useState("");
   const [cartesiaKey, setCartesiaKey] = useState("");
   const [preferences, setPreferences] = useState<Preferences>(() => ({
@@ -79,6 +92,7 @@ export function SettingsModal({
     micSensitivity: normalizeSensitivity(session.preferences.micSensitivity),
     inputDeviceId: session.preferences.inputDeviceId ?? "",
     outputDeviceId: session.preferences.outputDeviceId ?? "",
+    autoListen: session.preferences.autoListen ?? true,
   }));
   const [voices, setVoices] = useState<VoiceOption[]>([]);
   const [voicesError, setVoicesError] = useState<string | null>(null);
@@ -405,8 +419,16 @@ export function SettingsModal({
             </Section>
           )}
 
+          {tab === "character" && (
+            <CharacterSection
+              session={session}
+              desktop={desktop}
+              onSession={onSession}
+            />
+          )}
+
           {tab === "voice" && (
-            <Section title="Tolly's voice" intro="Pick the voice Cartesia uses and how it sounds. Preview plays through the speaker chosen in Microphone.">
+            <Section title="Voice" intro="Pick the voice Cartesia uses and how it sounds. Every character shares it. Preview plays through the speaker chosen in Mic.">
               <label className="block text-sm">
                 <span className="mb-1 block text-muted">Voice</span>
                 <select
@@ -733,6 +755,21 @@ function MicrophoneSection({
         </label>
       )}
 
+      <label className="flex items-start justify-between gap-4 rounded-2xl border border-line px-4 py-3">
+        <span>
+          <span className="block text-sm font-medium">Start listening when Tolly opens</span>
+          <span className="mt-1 block text-sm leading-6 text-muted">
+            With both keys saved, the microphone opens on its own and you can just start talking.
+          </span>
+        </span>
+        <input
+          type="checkbox"
+          className="mt-1 h-5 w-5 shrink-0 accent-[#6d5dfc]"
+          checked={preferences.autoListen}
+          onChange={(event) => onChange({ autoListen: event.target.checked })}
+        />
+      </label>
+
       <div>
         <p className="mb-2 text-sm text-muted">Sensitivity</p>
         <Segmented
@@ -773,6 +810,210 @@ function MicrophoneSection({
       </div>
       {deviceError && <p className="text-sm text-danger">{deviceError}</p>}
     </Section>
+  );
+}
+
+function CharacterSection({
+  session,
+  desktop,
+  onSession,
+}: {
+  session: Bootstrap;
+  desktop: boolean;
+  onSession: (session: Bootstrap) => void;
+}) {
+  const [prompt, setPrompt] = useState("");
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [open, setOpen] = useState<string | null>(session.activeCharacterId || null);
+  const canGenerate = desktop && session.groqConfigured && prompt.trim().length >= 3 && busy === null;
+
+  async function act(label: string, work: () => Promise<Bootstrap>) {
+    setBusy(label);
+    setError(null);
+    try {
+      onSession(await work());
+      return true;
+    } catch (failure: unknown) {
+      setError(toCommandError(failure).message);
+      return false;
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function onGenerate() {
+    if (!desktop) {
+      setError("Open the desktop app to create a character.");
+      return;
+    }
+    const text = prompt.trim();
+    const ok = await act("generate", () => generateCharacter(text));
+    if (ok) {
+      setPrompt("");
+    }
+  }
+
+  const ideas = ["a chef from Lisbon who loves football", "a retired sailor with a dog", "a cheerful barista in Tokyo"];
+
+  return (
+    <Section
+      title="Who you talk to"
+      intro="Describe a person in a few words and Tolly writes a full character: a name, a short profile, and a way of talking. Pick anyone here to start a fresh conversation with them."
+    >
+      <div className="rounded-2xl border border-line px-4 py-3">
+        <label className="block text-sm">
+          <span className="mb-1 block text-muted">Create a character</span>
+          <textarea
+            className="field min-h-20 resize-y"
+            placeholder="For example: a chef from Lisbon who loves football"
+            value={prompt}
+            maxLength={600}
+            onChange={(event) => setPrompt(event.target.value)}
+          />
+        </label>
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          {ideas.map((idea) => (
+            <button key={idea} type="button" className="pill rounded-full px-3 py-1 text-xs text-muted hover:text-ink" onClick={() => setPrompt(idea)}>
+              {idea}
+            </button>
+          ))}
+        </div>
+        <div className="mt-3 flex items-center justify-between gap-3">
+          <p className="text-xs text-muted">
+            {session.groqConfigured ? "Uses your Groq key once." : "Add a Groq key in Keys first."}
+          </p>
+          <button type="button" className="btn-primary rounded-full px-4 py-1.5 text-sm" disabled={!canGenerate} onClick={() => void onGenerate()}>
+            {busy === "generate" ? "Writing…" : "Generate"}
+          </button>
+        </div>
+      </div>
+
+      <ul className="space-y-2" aria-label="Characters">
+        <CharacterCard
+          name="Tolly"
+          tagline="The built-in friend who talks about anything"
+          emoji={null}
+          active={session.activeCharacterId === ""}
+          busy={busy !== null}
+          expanded={open === "tolly"}
+          onToggle={() => setOpen(open === "tolly" ? null : "tolly")}
+          onUse={() => void act("use", () => setActiveCharacter(""))}
+        >
+          <p className="text-sm leading-6 text-muted">
+            A friend sitting with you and talking. No lessons, no quizzes, just conversation. Tolly is always here and cannot be removed.
+          </p>
+        </CharacterCard>
+        {session.characters.map((character) => (
+          <CharacterCard
+            key={character.id}
+            name={character.name}
+            tagline={character.tagline}
+            emoji={character.emoji}
+            active={session.activeCharacterId === character.id}
+            busy={busy !== null}
+            expanded={open === character.id}
+            onToggle={() => setOpen(open === character.id ? null : character.id)}
+            onUse={() => void act("use", () => setActiveCharacter(character.id))}
+            onRemove={() => void act("remove", () => deleteCharacter(character.id))}
+          >
+            <CharacterDetails character={character} />
+          </CharacterCard>
+        ))}
+      </ul>
+      {error && <p className="text-sm text-danger">{error}</p>}
+    </Section>
+  );
+}
+
+function CharacterCard({
+  name,
+  tagline,
+  emoji,
+  active,
+  busy,
+  expanded,
+  onToggle,
+  onUse,
+  onRemove,
+  children,
+}: {
+  name: string;
+  tagline: string;
+  emoji: string | null;
+  active: boolean;
+  busy: boolean;
+  expanded: boolean;
+  onToggle: () => void;
+  onUse: () => void;
+  onRemove?: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <li className={`rounded-2xl border px-4 py-3 ${active ? "border-accent/60 bg-note" : "border-line"}`}>
+      <div className="flex items-center gap-3">
+        <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-card-2 text-xl" aria-hidden="true">
+          {emoji ?? <Face phase="idle" small />}
+        </span>
+        <button type="button" className="min-w-0 flex-1 text-left" aria-expanded={expanded} onClick={onToggle}>
+          <span className="flex items-center gap-2">
+            <span className="truncate text-sm font-semibold">{name}</span>
+            {active && <span className="rounded-full bg-accent/20 px-2 py-0.5 text-[0.65rem] font-medium uppercase tracking-wide text-accent">Talking now</span>}
+          </span>
+          <span className="block truncate text-sm text-muted">{tagline}</span>
+        </button>
+        {!active && (
+          <button type="button" className="btn-primary shrink-0 rounded-full px-3 py-1.5 text-sm" disabled={busy} onClick={onUse}>
+            Talk
+          </button>
+        )}
+      </div>
+      {expanded && (
+        <div className="mt-3 space-y-3 border-t border-line pt-3">
+          {children}
+          {onRemove && (
+            <button type="button" className="text-sm text-danger hover:underline disabled:opacity-50" disabled={busy} onClick={onRemove}>
+              Remove this character
+            </button>
+          )}
+        </div>
+      )}
+    </li>
+  );
+}
+
+function CharacterDetails({ character }: { character: Character }) {
+  return (
+    <dl className="space-y-2 text-sm">
+      <div>
+        <dt className="text-xs uppercase tracking-wide text-muted">About</dt>
+        <dd className="mt-0.5 leading-6">{character.description}</dd>
+      </div>
+      {character.personality && (
+        <div>
+          <dt className="text-xs uppercase tracking-wide text-muted">Personality</dt>
+          <dd className="mt-0.5 leading-6">{character.personality}</dd>
+        </div>
+      )}
+      {character.speakingStyle && (
+        <div>
+          <dt className="text-xs uppercase tracking-wide text-muted">How they talk</dt>
+          <dd className="mt-0.5 leading-6">{character.speakingStyle}</dd>
+        </div>
+      )}
+      {character.greeting && (
+        <div>
+          <dt className="text-xs uppercase tracking-wide text-muted">Opening line</dt>
+          <dd className="mt-0.5 leading-6 italic">“{character.greeting}”</dd>
+        </div>
+      )}
+      {character.prompt && (
+        <div>
+          <dt className="text-xs uppercase tracking-wide text-muted">Made from</dt>
+          <dd className="mt-0.5 leading-6 text-muted">{character.prompt}</dd>
+        </div>
+      )}
+    </dl>
   );
 }
 

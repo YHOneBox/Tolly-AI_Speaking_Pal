@@ -4,9 +4,11 @@ use std::sync::Arc;
 use tauri::{AppHandle, State};
 
 use crate::cartesia;
+use crate::characters::{self, Character};
 use crate::error::ApiError;
 use crate::groq::{self, HistoryMessage};
 use crate::prefs::{self, Preferences, TokenUsage};
+use crate::prompt;
 use crate::secrets::{self};
 use crate::AppState;
 
@@ -19,6 +21,9 @@ pub struct Bootstrap {
     pub preferences: Preferences,
     pub usage: TokenUsage,
     pub warning_ratio: f64,
+    pub characters: Vec<Character>,
+    /// Empty when the built-in Tolly is active.
+    pub active_character_id: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -41,6 +46,8 @@ pub struct SaveSettings {
     pub output_device_id: String,
     #[serde(default = "prefs::default_mic_sensitivity")]
     pub mic_sensitivity: String,
+    #[serde(default = "prefs::default_true")]
+    pub auto_listen: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -74,6 +81,7 @@ fn nonempty(value: Option<String>) -> Option<String> {
 #[tauri::command]
 pub fn bootstrap(app: AppHandle) -> Result<Bootstrap, ApiError> {
     let keys = secrets::status()?;
+    let roster = characters::load(&app)?;
     Ok(Bootstrap {
         version: env!("CARGO_PKG_VERSION").to_string(),
         groq_configured: keys.groq,
@@ -81,7 +89,53 @@ pub fn bootstrap(app: AppHandle) -> Result<Bootstrap, ApiError> {
         preferences: prefs::load(&app)?,
         usage: prefs::usage_today(&app)?,
         warning_ratio: 0.8,
+        characters: roster.characters,
+        active_character_id: roster.active_character_id,
     })
+}
+
+#[tauri::command]
+pub async fn generate_character(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    prompt: String,
+) -> Result<Bootstrap, ApiError> {
+    let prompt = characters::clean_prompt(&prompt)?;
+    let (preferences, _) = prefs::ensure_budget(&app)?;
+    let http = state.http.clone();
+    let api_key = secrets::groq_key()?;
+    let user = format!("Who I would like to talk to: {prompt}");
+    let output = groq::complete_object(
+        &http,
+        &api_key,
+        &preferences.llm_model,
+        characters::GENERATOR_PROMPT,
+        &user,
+        0.9,
+    )
+    .await?;
+    prefs::add_usage(&app, output.prompt_tokens, output.completion_tokens)?;
+    let character = characters::from_model_output(
+        &output.text,
+        &prompt,
+        characters::new_id(),
+        chrono::Local::now().format("%Y-%m-%d").to_string(),
+    )
+    .map_err(|message| ApiError::InvalidModelOutput { message })?;
+    characters::add(&app, character)?;
+    bootstrap(app)
+}
+
+#[tauri::command]
+pub fn set_active_character(app: AppHandle, id: String) -> Result<Bootstrap, ApiError> {
+    characters::set_active(&app, id.trim())?;
+    bootstrap(app)
+}
+
+#[tauri::command]
+pub fn delete_character(app: AppHandle, id: String) -> Result<Bootstrap, ApiError> {
+    characters::remove(&app, id.trim())?;
+    bootstrap(app)
 }
 
 #[tauri::command]
@@ -100,6 +154,7 @@ pub fn save_settings(app: AppHandle, settings: SaveSettings) -> Result<Bootstrap
         input_device_id: settings.input_device_id,
         output_device_id: settings.output_device_id,
         mic_sensitivity: prefs::normalize_sensitivity(&settings.mic_sensitivity),
+        auto_listen: settings.auto_listen,
     };
     prefs::save(&app, &preferences)?;
     bootstrap(app)
@@ -156,7 +211,9 @@ pub async fn converse(
     let (preferences, _) = prefs::ensure_budget(&app)?;
     let http = state.http.clone();
     let api_key = secrets::groq_key()?;
-    let result = groq::converse(&http, &api_key, &preferences.llm_model, &history).await?;
+    let persona = characters::active(&app)?.map(|character| character.persona());
+    let system = prompt::system_prompt(persona.as_deref());
+    let result = groq::converse(&http, &api_key, &preferences.llm_model, &system, &history).await?;
     let usage = prefs::add_usage(&app, result.prompt_tokens, result.completion_tokens)?;
     Ok(ConverseResponse {
         raw_json: result.raw_json,

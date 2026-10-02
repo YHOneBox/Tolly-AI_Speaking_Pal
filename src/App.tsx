@@ -20,6 +20,7 @@ import { decodeBase64, PcmPlayer, SpeechCapture, type MicLevel } from "./lib/aud
 import { isDesktopShell, toCommandError } from "./lib/errors";
 import { blendSkill, estimateSkill, parseDualOutput, speakingBand } from "./lib/parseReply";
 import {
+  activePersona,
   DEFAULT_PREFERENCES,
   normalizeFontSize,
   normalizeLayout,
@@ -34,12 +35,14 @@ import {
 const QUIET: MicLevel = { level: 0, voiced: false, capturing: false };
 
 const EMPTY_SESSION: Bootstrap = {
-  version: "1.1.1",
+  version: "1.2.0",
   groqConfigured: false,
   cartesiaConfigured: false,
   preferences: DEFAULT_PREFERENCES,
   usage: { day: "", promptTokens: 0, completionTokens: 0 },
   warningRatio: 0.8,
+  characters: [],
+  activeCharacterId: "",
 };
 
 export default function App() {
@@ -80,6 +83,8 @@ export default function App() {
   const bargeTimer = useRef<number | null>(null);
   const onUtteranceRef = useRef<(wav: Uint8Array) => void>(() => undefined);
   const onSpeechStartRef = useRef<() => void>(() => undefined);
+  const lastCharacterRef = useRef<string | null>(null);
+  const persona = activePersona(session.characters, session.activeCharacterId);
 
   function setPhase(next: Phase): void {
     phaseRef.current = next;
@@ -108,9 +113,14 @@ export default function App() {
         if (cancelled) {
           return;
         }
+        sessionRef.current = next;
         setSession(next);
         if (usageTotal(next.usage) / next.preferences.dailyTokenBudget >= next.warningRatio) {
           setBudgetNote("You have used most of today's token budget.");
+        }
+        if (next.preferences.autoListen && next.groqConfigured && next.cartesiaConfigured) {
+          // Start listening right away, so the first thing to do is simply talk.
+          void startContinuous();
         }
       } catch (error: unknown) {
         if (!cancelled) {
@@ -177,6 +187,35 @@ export default function App() {
   useEffect(() => {
     playerRef.current?.setOutput(session.preferences.outputDeviceId);
   }, [session.preferences.outputDeviceId]);
+
+  const activeCharacterId = session.activeCharacterId;
+  useEffect(() => {
+    if (lastCharacterRef.current === null) {
+      lastCharacterRef.current = activeCharacterId;
+      return;
+    }
+    if (lastCharacterRef.current === activeCharacterId) {
+      return;
+    }
+    lastCharacterRef.current = activeCharacterId;
+    // A different person is talking now. Start the conversation fresh.
+    cutAssistant();
+    messagesRef.current = [];
+    latestNotesRef.current = [];
+    setYouSaid(null);
+    setTollySaid(null);
+    setLatestNotes([]);
+    setEarlierNotes([]);
+    setHeardYou(false);
+    setSkillRating(null);
+    setNotice(null);
+    if (listeningRef.current) {
+      captureRef.current?.setPaused(false);
+      setPhase("listening");
+    } else {
+      setPhase("idle");
+    }
+  }, [activeCharacterId]);
 
   useEffect(() => {
     return () => {
@@ -625,7 +664,7 @@ export default function App() {
   const started = heardYou || Boolean(tollySaid);
   const status =
     phase === "speaking"
-      ? "Tolly is talking. Start speaking to cut in."
+      ? `${persona.name} is talking. Start speaking to cut in.`
       : phase === "thinking"
         ? "Thinking…"
         : phase === "transcribing"
@@ -643,8 +682,13 @@ export default function App() {
       <header className="px-6 pt-4 pb-2">
         <div className={`mx-auto flex ${shell} items-center justify-between gap-4`}>
           <div className="flex items-center gap-3">
-            <p className="gradient-text text-lg font-semibold tracking-tight">Tolly</p>
-            <span className="text-xs text-muted">v{session.version}</span>
+            {persona.emoji && (
+              <span className="grid h-8 w-8 place-items-center rounded-full bg-note text-lg" aria-hidden="true">
+                {persona.emoji}
+              </span>
+            )}
+            <p className="gradient-text text-lg font-semibold tracking-tight">{persona.name}</p>
+            <span className="text-xs text-muted">{persona.id ? `with Tolly v${session.version}` : `v${session.version}`}</span>
           </div>
           <div className="flex items-center gap-2">
             <div
@@ -709,6 +753,7 @@ export default function App() {
           <Stage
             layout={layout}
             phase={phase}
+            persona={persona}
             youSaid={youSaid}
             notes={latestNotes}
             earlier={earlierNotes}
